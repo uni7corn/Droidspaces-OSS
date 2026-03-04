@@ -135,9 +135,15 @@ int is_dangerous_node(const char *name) {
   /* Tier 12: Virtual Consoles */
   if (strncmp(name, "vcs", 3) == 0)
     return 1;
-  /* Tier 13: Watchdogs */
-  if (strncmp(name, "watchdog", 8) == 0)
+  /* Tier 13: Watchdogs (Aggressive catch) */
+  if (strstr(name, "watchdog") != NULL)
     return 1;
+
+  /* Tier 13.5: Qualcomm RPC & Secure Interfaces (High Risk) */
+  if (strstr(name, "qseecom") != NULL || strstr(name, "smcinvoke") != NULL ||
+      strstr(name, "adsprpc") != NULL)
+    return 1;
+
   /* Tier 14: DMA/Memory Gaps */
   if (strcmp(name, "udmabuf") == 0 || strcmp(name, "snapshot") == 0)
     return 1;
@@ -148,9 +154,34 @@ int is_dangerous_node(const char *name) {
   if (strncmp(name, "stp", 3) == 0)
     return 1;
 
+  /* Tier 16.5: Qualcomm / Modem Connectivity Loopholes */
+  if (strncmp(name, "rmnet_", 6) == 0 || strncmp(name, "ipa", 3) == 0 ||
+      strncmp(name, "at_usb", 6) == 0 || strncmp(name, "at_mdm", 6) == 0 ||
+      strncmp(name, "wwan_", 5) == 0 || strncmp(name, "btfmslim", 8) == 0 ||
+      strncmp(name, "btpower", 7) == 0 || strncmp(name, "smd", 3) == 0 ||
+      strncmp(name, "apr_", 4) == 0 || strstr(name, "aud_") != NULL ||
+      strstr(name, "icnss_") != NULL)
+    return 1;
+
+  /* Tier 16.6: Hypervisor Consoles & Virtio Loopbacks */
+  if (strncmp(name, "hvc", 3) == 0 || strncmp(name, "gh_", 3) == 0)
+    return 1;
+
   /* Tier 17: MTK Audio IPI / SCP IPC - known exploitable attack surface */
   if (strcmp(name, "audio_ipi") == 0 || strcmp(name, "scp_audio_ipi") == 0 ||
       strcmp(name, "vow") == 0 || strcmp(name, "vcp") == 0)
+    return 1;
+
+  /* Tier 17.5: Qualcomm SoC Tracing & DSP Debug */
+  if (strncmp(name, "coresight", 9) == 0 ||
+      strncmp(name, "remoteproc", 10) == 0 || strncmp(name, "rpmsg_", 6) == 0 ||
+      strcmp(name, "cvp") == 0 || strncmp(name, "rdbg_", 5) == 0 ||
+      strcmp(name, "dcc_sram") == 0 || strcmp(name, "spec_sync") == 0 ||
+      strcmp(name, "synx_device") == 0)
+    return 1;
+
+  /* Tier 17.6: Android-Specific Compatibility Nodes (Anbox, etc.) */
+  if (strncmp(name, "anbox-", 6) == 0 || strcmp(name, "android_ssusbcon") == 0)
     return 1;
 
   /* Tier 18: eMMC Replay-Protected Memory Block - stores DRM/boot keys */
@@ -190,8 +221,9 @@ int is_dangerous_node(const char *name) {
       strcmp(name, "drm_wv") == 0 || strcmp(name, "sec-nfc") == 0)
     return 1;
 
-  /* Tier 26: MTK debug/tracing nodes */
-  if (strcmp(name, "eara-io") == 0 || strcmp(name, "RT_Monitor") == 0)
+  /* Tier 26: MTK debug/tracing nodes and QCOM/Other misc */
+  if (strcmp(name, "eara-io") == 0 || strcmp(name, "RT_Monitor") == 0 ||
+      strcmp(name, "stats") == 0)
     return 1;
   if (strncmp(name, "wmt", 3) == 0) /* wmtdetect, wmtWifi, wmtNfc, etc. */
     return 1;
@@ -219,7 +251,9 @@ int is_dangerous_node(const char *name) {
    * Cluster/GPU/Memory frequency overrides allow host sabotage. */
   if (strncmp(name, "cluster", 7) == 0 || strncmp(name, "gpu_freq", 8) == 0 ||
       strncmp(name, "cpu_online_", 11) == 0 ||
-      strcmp(name, "memory_bandwidth") == 0)
+      strcmp(name, "memory_bandwidth") == 0 ||
+      strstr(name, "msm_audio_ion") != NULL ||
+      strstr(name, "msm_hdcp") != NULL || strstr(name, "msm_sps") != NULL)
     return 1;
 
   /* Tier 31: Exynos Modem & Multi-PDP
