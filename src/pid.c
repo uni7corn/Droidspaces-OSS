@@ -522,7 +522,9 @@ int ds_metadata_sync(pid_t pid) {
     /* Use precision to satisfy compiler about potential truncation */
     snprintf(recovery_cfg.config_file, sizeof(recovery_cfg.config_file),
              "%.3800s/container.config", container_dir);
-    ds_config_save(recovery_cfg.config_file, &recovery_cfg);
+    if (ds_config_save(recovery_cfg.config_file, &recovery_cfg) < 0) {
+      ds_warn("Recovery: Failed to persist configuration for PID %d", pid);
+    }
   }
 
   /* 4. Restore PID Sidecar */

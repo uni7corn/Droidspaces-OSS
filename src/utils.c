@@ -317,7 +317,7 @@ int build_proc_root_path(pid_t pid, const char *suffix, char *buf,
 int parse_os_release(const char *rootfs_path, char *id_out, char *ver_out,
                      size_t out_size) {
   char path[PATH_MAX];
-  snprintf(path, sizeof(path), "%s" DS_OS_RELEASE, rootfs_path);
+  snprintf(path, sizeof(path), "%.4000s" DS_OS_RELEASE, rootfs_path);
 
   char buf[4096];
   if (read_file(path, buf, sizeof(buf)) < 0)

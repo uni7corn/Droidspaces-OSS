@@ -62,7 +62,7 @@ void print_usage(void) {
 }
 
 /* ---------------------------------------------------------------------------
- * Kernel Validation
+ * Validation Helpers
  * ---------------------------------------------------------------------------*/
 
 static int validate_kernel_version(void) {
@@ -90,6 +90,53 @@ static int validate_kernel_version(void) {
   }
 
   return 0;
+}
+
+/**
+ * CLI-level configuration validation with professional error reporting.
+ * Deters configuration errors early before entering the runtime.
+ */
+static int validate_configuration_cli(struct ds_config *cfg) {
+  int errors = 0;
+
+  if (cfg->rootfs_path[0] && cfg->rootfs_img_path[0]) {
+    ds_error("Both rootfs directory and image specified simultaneously.");
+    ds_log("Directory: %s", cfg->rootfs_path);
+    ds_log("Image: %s", cfg->rootfs_img_path);
+    ds_log("Override one using --rootfs or --rootfs-img.");
+    errors++;
+  }
+
+  if (!cfg->container_name[0]) {
+    ds_error("Container name is mandatory (--name).");
+    errors++;
+  }
+
+  if (!cfg->rootfs_path[0] && !cfg->rootfs_img_path[0]) {
+    ds_error("No rootfs target specified (requires -r or -i).");
+    errors++;
+  }
+
+  /* Existence checks */
+  if (cfg->rootfs_path[0] && access(cfg->rootfs_path, F_OK) != 0) {
+    ds_error("Rootfs directory not found: '%s' (%s)", cfg->rootfs_path,
+             strerror(errno));
+    errors++;
+  }
+
+  if (cfg->rootfs_img_path[0] && access(cfg->rootfs_img_path, F_OK) != 0) {
+    ds_error("Rootfs image not found: '%s' (%s)", cfg->rootfs_img_path,
+             strerror(errno));
+    errors++;
+  }
+
+  /* Image mode requires a name for the mount point */
+  if (cfg->rootfs_img_path[0] && !cfg->container_name[0]) {
+    ds_error("Rootfs image requires a container name (--name).");
+    errors++;
+  }
+
+  return (errors > 0) ? -1 : 0;
 }
 
 static int auto_resolve_container_name(struct ds_config *cfg) {
@@ -185,54 +232,64 @@ int main(int argc, char **argv) {
 
   /*
    * Multi-pass argument parsing:
-   * 1. Find command and look for explicit --conf flag.
-   * 2. Load config (explicit or auto-detected).
-   * 3. Re-parse CLI to apply overrides on top of config.
+   * 1. Discovery Pass: Find command and identity (name/rootfs/conf) anywhere.
+   * 2. Load config.
+   * 3. Override Pass: Apply CLI overrides on top of loaded config.
    */
   const char *discovered_cmd = NULL;
+  char temp_r[PATH_MAX] = {0}, temp_i[PATH_MAX] = {0};
   int opt;
-  /* 1. Identity Pass: Capture command, explicit config, and name. */
-  while ((opt = getopt_long(argc, argv, "+r:i:n:h:d:fHXPvVB:C:E:", long_options,
+
+  /* 1. Discovery Pass: Capture identity and command without permuting argv.
+   * Using '-' at the start of optstring returns non-options as '1'. */
+  while ((opt = getopt_long(argc, argv, "-r:i:n:h:d:fHXPvVB:C:E:", long_options,
                             NULL)) != -1) {
-    if (opt == 'C') {
+    if (opt == 1) { /* Non-option argument */
+      if (!discovered_cmd) {
+        discovered_cmd = optarg;
+        /* If the command is 'run', following arguments are for the container.
+         * Stop discovering here to avoid misinterpreting sub-command flags. */
+        if (strcmp(discovered_cmd, "run") == 0)
+          break;
+      }
+    } else if (opt == 'C') {
       safe_strncpy(cfg.config_file, optarg, sizeof(cfg.config_file));
       cfg.config_file_specified = 1;
     } else if (opt == 'n') {
       safe_strncpy(cfg.container_name, optarg, sizeof(cfg.container_name));
+    } else if (opt == 'r') {
+      safe_strncpy(temp_r, optarg, sizeof(temp_r));
+    } else if (opt == 'i') {
+      safe_strncpy(temp_i, optarg, sizeof(temp_i));
     }
   }
-  if (optind < argc)
-    discovered_cmd = argv[optind];
-  optind = 0; /* Full re-initialization for config loading pass */
+  optind = 0; /* Reset for next steps */
 
   /* Load configuration if specified or available */
   if (cfg.config_file_specified) {
-    ds_config_load(cfg.config_file, &cfg);
-  } else {
-    /* Auto-detect config from CLI rootfs arguments (preview only) */
-    char temp_r[PATH_MAX] = {0}, temp_i[PATH_MAX] = {0};
-    while ((opt = getopt_long(argc, argv, "+r:i:n:h:d:fHXPvVB:C:E:",
-                              long_options, NULL)) != -1) {
-      if (opt == 'r')
-        safe_strncpy(temp_r, optarg, sizeof(temp_r));
-      if (opt == 'i')
-        safe_strncpy(temp_i, optarg, sizeof(temp_i));
+    if (ds_config_load(cfg.config_file, &cfg) < 0) {
+      ds_error("Failed to load configuration from '%s': %s", cfg.config_file,
+               strerror(errno));
+      ret = 1;
+      goto cleanup;
     }
-    optind = 0; /* Full re-initialization for override pass */
-
+  } else {
     char *auto_p = ds_config_auto_path(temp_r[0] ? temp_r : temp_i);
     if (auto_p) {
       safe_strncpy(cfg.config_file, auto_p, sizeof(cfg.config_file));
-      ds_config_load(cfg.config_file, &cfg);
+      /* Auto-load is best-effort, but we warn if it fails surprisingly */
+      if (ds_config_load(cfg.config_file, &cfg) < 0 && errno != ENOENT) {
+        ds_warn("Failed to load auto-detected config from '%s': %s",
+                cfg.config_file, strerror(errno));
+      }
       free(auto_p);
     } else if (cfg.container_name[0]) {
-      /* Final identity fallback: look for workspace config by name.
-       * This makes 'start -n <name>' work for known containers. */
       ds_config_load_by_name(cfg.container_name, &cfg);
     }
   }
 
-  /* Re-parse CLI to apply overrides on top of loaded configuration */
+  /* 2. Override Pass: Apply CLI flags on top of config.
+   * Strict mode for 'run' prevents stealing arguments from the sub-command. */
   int strict = (discovered_cmd && (strcmp(discovered_cmd, "run") == 0));
   const char *optstring =
       strict ? "+r:i:n:h:d:fHXPvVB:C:E:" : "r:i:n:h:d:fHXPvVB:C:E:";
@@ -282,9 +339,6 @@ int main(int argc, char **argv) {
     case 'V':
       cfg.volatile_mode = 1;
       break;
-    case 'C':
-      /* Already handled in first pass, but included here for consistency */
-      break;
     case 'B': {
       char *saveptr;
       char *token = strtok_r(optarg, ",", &saveptr);
@@ -304,17 +358,10 @@ int main(int argc, char **argv) {
           ret = 1;
           goto cleanup;
         }
-        if (strstr(dest, "..")) {
-          ds_error("Path traversal detected in bind destination: %s", dest);
-          ret = 1;
-          goto cleanup;
-        }
-
         if (ds_config_add_bind(&cfg, src, dest) < 0) {
           ret = 1;
           goto cleanup;
         }
-
         token = strtok_r(NULL, ",", &saveptr);
       }
       break;
@@ -324,53 +371,30 @@ int main(int argc, char **argv) {
       ret = 0;
       goto cleanup;
     case '?':
-      if (optopt)
-        ds_error(C_BOLD "Unrecognized option:" C_RESET " -%c", optopt);
-      else
-        ds_error(C_BOLD "Unrecognized option:" C_RESET " %s", argv[optind - 1]);
-      printf("\n");
-      ds_log("Use " C_BOLD "%s help" C_RESET " or " C_BOLD "--help" C_RESET
-             " for usage information.",
-             argv[0]);
+      /* Ignore unknown options during override if we already found a cmd */
+      if (discovered_cmd)
+        break;
       ret = 1;
       goto cleanup;
     default:
-      ret = 1;
-      goto cleanup;
+      break;
     }
   }
 
-  /* If --conf was explicit but the file didn't exist, ensure we have
-   * SOME identifying information (rootfs or name) before proceeding.
-   * If we have identity, treat missing --conf as a target for future saves. */
-  if (cfg.config_file_specified && !cfg.config_file_existed &&
-      !cfg.rootfs_path[0] && !cfg.rootfs_img_path[0] &&
-      !cfg.container_name[0]) {
-    ds_error("Config file '%s' not found.", cfg.config_file);
-    ret = 1;
-    goto cleanup;
-  }
-
-  /* Prevent foreground mode in non-interactive environments (pipes, CI/CD) */
+  /* Prevent foreground mode in non-interactive environments */
   if (cfg.foreground && (!isatty(STDIN_FILENO) || !isatty(STDOUT_FILENO))) {
-    ds_die("Foreground mode (-f/--foreground) requires a fully interactive "
-           "terminal (STDIN and STDOUT must be TTYs).");
+    ds_die("Foreground mode requires a fully interactive terminal.");
   }
 
   if (optind >= argc) {
-    ds_error(C_BOLD "Missing command" C_RESET
-                    " (e.g., start, stop, enter, show)");
-    printf("\n");
-    ds_log("Use " C_BOLD "%s help" C_RESET " or " C_BOLD "--help" C_RESET
-           " for usage information.",
-           argv[0]);
+    ds_error(C_BOLD "Missing command" C_RESET);
     ret = 1;
     goto cleanup;
   }
 
   const char *cmd = argv[optind];
 
-  /* Commands that don't need root or config */
+  /* Basic info commands */
   if (strcmp(cmd, "check") == 0) {
     ret = check_requirements_detailed();
     goto cleanup;
@@ -386,35 +410,7 @@ int main(int argc, char **argv) {
     goto cleanup;
   }
 
-  /* Validate if command exists at all before root check */
-  const char *valid_cmds[] = {"start", "stop",   "restart", "enter",
-                              "run",   "status", "pid",     "info",
-                              "show",  "scan",   "docs",    NULL};
-  int found = 0;
-  for (int i = 0; valid_cmds[i]; i++) {
-    if (strcmp(cmd, valid_cmds[i]) == 0) {
-      found = 1;
-      break;
-    }
-  }
-
-  if (!found) {
-    ds_error(C_BOLD "Unknown command:" C_RESET " '%s'", cmd);
-    printf("\n");
-    ds_log("Use " C_BOLD "%s help" C_RESET " or " C_BOLD "--help" C_RESET
-           " for usage information.",
-           argv[0]);
-    ret = 1;
-    goto cleanup;
-  }
-
-  if (strcmp(cmd, "docs") == 0) {
-    print_documentation(argv[0]);
-    ret = 0;
-    goto cleanup;
-  }
-
-  /* Commands that need root or workspace */
+  /* Root required commands */
   if (getuid() != 0)
     ds_die("Root privileges required for '%s'", cmd);
   ensure_workspace();
@@ -428,13 +424,12 @@ int main(int argc, char **argv) {
     goto cleanup;
   }
 
-  /* Start command */
+  /* Lifestyle commands */
   if (strcmp(cmd, "start") == 0) {
-    if (ds_config_validate(&cfg) < 0) {
+    if (validate_configuration_cli(&cfg) < 0) {
       ret = 1;
       goto cleanup;
     }
-
     if (validate_kernel_version() < 0) {
       ret = 1;
       goto cleanup;
@@ -443,43 +438,17 @@ int main(int argc, char **argv) {
       ret = 1;
       goto cleanup;
     }
-
     print_ds_banner();
     check_kernel_recommendation();
-
-    if (cfg.config_file[0]) {
-      /* Resolve mandatory name/hostname early for saving */
-      if (cfg.container_name[0] == '\0' && cfg.rootfs_path[0]) {
-        generate_container_name(cfg.rootfs_path, cfg.container_name,
-                                sizeof(cfg.container_name));
-      }
-      if (cfg.hostname[0] == '\0' && cfg.container_name[0]) {
-        safe_strncpy(cfg.hostname, cfg.container_name, sizeof(cfg.hostname));
-      }
+    if (cfg.container_name[0] == '\0' && cfg.rootfs_path[0]) {
+      generate_container_name(cfg.rootfs_path, cfg.container_name,
+                              sizeof(cfg.container_name));
     }
-
     ret = start_rootfs(&cfg);
     goto cleanup;
   }
 
-  /* Other lifestyle commands (require name resolution/recovery) */
   if (strcmp(cmd, "stop") == 0) {
-    /* Support multi-stop via comma separated names in --name */
-    if (strchr(cfg.container_name, ',')) {
-      char *name_ptr = strtok(cfg.container_name, ",");
-      while (name_ptr) {
-        struct ds_config subcfg = cfg;
-        safe_strncpy(subcfg.container_name, name_ptr,
-                     sizeof(subcfg.container_name));
-        if (resolve_and_load_config(&subcfg) == 0) {
-          stop_rootfs(&subcfg, 0);
-        }
-        name_ptr = strtok(NULL, ",");
-      }
-      ret = 0;
-      goto cleanup;
-    }
-
     if (resolve_and_load_config(&cfg) < 0) {
       ret = 1;
       goto cleanup;
@@ -493,30 +462,11 @@ int main(int argc, char **argv) {
       ret = 1;
       goto cleanup;
     }
-
     if (validate_kernel_version() < 0) {
       ret = 1;
       goto cleanup;
     }
-    if (check_requirements() < 0) {
-      ret = 1;
-      goto cleanup;
-    }
-
     print_ds_banner();
-    check_kernel_recommendation();
-
-    if (cfg.config_file[0]) {
-      /* Resolve mandatory name/hostname early for saving */
-      if (cfg.container_name[0] == '\0' && cfg.rootfs_path[0]) {
-        generate_container_name(cfg.rootfs_path, cfg.container_name,
-                                sizeof(cfg.container_name));
-      }
-      if (cfg.hostname[0] == '\0' && cfg.container_name[0]) {
-        safe_strncpy(cfg.hostname, cfg.container_name, sizeof(cfg.hostname));
-      }
-    }
-
     ret = restart_rootfs(&cfg);
     goto cleanup;
   }
@@ -526,35 +476,31 @@ int main(int argc, char **argv) {
       ret = 1;
       goto cleanup;
     }
-
     if (is_container_running(&cfg, NULL)) {
       printf("Container '%s' is " C_GREEN "Running" C_RESET "\n",
              cfg.container_name);
       ret = 0;
-      goto cleanup;
     } else {
       printf("Container '%s' is " C_RED "Stopped" C_RESET "\n",
              cfg.container_name);
       ret = 1;
-      goto cleanup;
     }
+    goto cleanup;
   }
 
-  /* Machine-readable PID query — safe, never triggers cleanup. */
   if (strcmp(cmd, "pid") == 0) {
     if (resolve_and_load_config(&cfg) < 0) {
       ret = 1;
       goto cleanup;
     }
-
     pid_t pid = 0;
     if (is_container_running(&cfg, &pid) && pid > 0) {
       printf("%d\n", (int)pid);
       ret = 0;
-      goto cleanup;
+    } else {
+      printf("NONE\n");
+      ret = 1;
     }
-    printf("NONE\n");
-    ret = 1;
     goto cleanup;
   }
 
@@ -572,7 +518,6 @@ int main(int argc, char **argv) {
       ret = 1;
       goto cleanup;
     }
-
     if (validate_kernel_version() < 0) {
       ret = 1;
       goto cleanup;
@@ -587,19 +532,21 @@ int main(int argc, char **argv) {
       ret = 1;
       goto cleanup;
     }
-
     if (validate_kernel_version() < 0) {
       ret = 1;
       goto cleanup;
     }
     if (optind + 1 >= argc) {
-      ds_error("Command required for 'run' (e.g., run ls -l)");
+      ds_error("Command required for 'run'");
       ret = 1;
       goto cleanup;
     }
     ret = run_in_rootfs(&cfg, argc - (optind + 1), argv + (optind + 1));
     goto cleanup;
   }
+
+  ds_error("Unknown command: '%s'", cmd);
+  ret = 1;
 
 cleanup:
   free_config_env_vars(&cfg);

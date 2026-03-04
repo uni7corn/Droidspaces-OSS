@@ -226,6 +226,10 @@ static void cleanup_container_resources(struct ds_config *cfg, pid_t pid,
   }
 }
 
+/* ---------------------------------------------------------------------------
+ * Introspection
+ * ---------------------------------------------------------------------------*/
+
 int is_valid_container_pid(pid_t pid) {
   char path[PATH_MAX];
   char buf[256];
@@ -249,10 +253,6 @@ int is_valid_container_pid(pid_t pid) {
 
   return 1;
 }
-
-/* ---------------------------------------------------------------------------
- * Introspection
- * ---------------------------------------------------------------------------*/
 
 /* ---------------------------------------------------------------------------
  * Start
@@ -352,11 +352,24 @@ int start_rootfs(struct ds_config *cfg) {
   /* Persist the new UUID to config immediately so disk always matches
    * the running container. CLI overrides (e.g. -f) are already in cfg
    * at this point since start_rootfs is called after argument parsing. */
-  if (cfg->config_file[0])
-    ds_config_save(cfg->config_file, cfg);
+  if (cfg->config_file[0]) {
+    int was_new = !cfg->config_file_existed;
+    if (ds_config_save(cfg->config_file, cfg) < 0) {
+      ds_error("Failed to persist configuration to '%s': %s", cfg->config_file,
+               strerror(errno));
+      goto cleanup;
+    }
+    if (was_new) {
+      ds_log("Configuration persisted to " C_BOLD "%s" C_RESET,
+             cfg->config_file);
+    }
+  }
 
   /* Mirror to workspace so 'start -n <name>' works later without --conf */
-  ds_config_save_by_name(cfg->container_name, cfg);
+  if (ds_config_save_by_name(cfg->container_name, cfg) < 0) {
+    ds_warn("Failed to mirror configuration to workspace for '%s': %s",
+            cfg->container_name, strerror(errno));
+  }
 
   /* Parse environment file while host paths are reachable (before pivot_root)
    */

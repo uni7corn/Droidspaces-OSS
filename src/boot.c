@@ -260,7 +260,9 @@ int internal_boot(struct ds_config *cfg) {
   /* Save a normalized copy of the config inside /run for metadata recovery.
    * ds_config_save() resolves rootfs_path to absolute via realpath(),
    * preventing broken relative paths in the internal backup. */
-  ds_config_save("run/droidspaces/container.config", cfg);
+  if (ds_config_save("run/droidspaces/container.config", cfg) < 0) {
+    ds_warn("Boot: Failed to save internal configuration backup");
+  }
 
   write_file("run/droidspaces/name", cfg->container_name);
 
