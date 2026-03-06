@@ -1227,23 +1227,26 @@ int enter_rootfs(struct ds_config *cfg, const char *user) {
     if (enter_namespace(pid, cfg) < 0)
       _exit(EXIT_FAILURE);
 
-    /* Allocate TTY INSIDE the container namespaces */
-    struct ds_tty_info tty;
-    if (ds_terminal_create(&tty) < 0)
-      _exit(EXIT_FAILURE);
-
-    /* Send master FD back to parent */
-    if (ds_send_fd(sv[1], tty.master) < 0)
-      _exit(EXIT_FAILURE);
-
-    close(tty.master);
-    close(sv[1]);
-
-    /* Must fork again to actually be in the new PID namespace */
+    /* Must fork again to actually be in the new PID namespace before opening
+     * PTY so that the PTY allocates natively inside the container's PID scope.
+     */
     pid_t shell_pid = fork();
     if (shell_pid < 0)
       _exit(EXIT_FAILURE);
+
     if (shell_pid == 0) {
+      /* Allocate TTY INSIDE the container namespaces */
+      struct ds_tty_info tty;
+      if (ds_terminal_create(&tty) < 0)
+        _exit(EXIT_FAILURE);
+
+      /* Send master FD back to parent on host */
+      if (ds_send_fd(sv[1], tty.master) < 0)
+        _exit(EXIT_FAILURE);
+
+      close(tty.master);
+      close(sv[1]);
+
       /* Establish controlling terminal in the FINAL child process.
        * This is critical: setsid() + TIOCSCTTY must happen in the
        * process that will exec the shell, so that programs like
@@ -1291,8 +1294,8 @@ int enter_rootfs(struct ds_config *cfg, const char *user) {
       ds_error("Failed to find any usable shell");
       _exit(EXIT_FAILURE);
     }
-    /* Intermediate: close slave fd we no longer need, wait for shell */
-    close(tty.slave);
+    /* Intermediate: wait for shell, no resources to hold here */
+    close(sv[1]);
     waitpid(shell_pid, NULL, 0);
     _exit(EXIT_SUCCESS);
   }

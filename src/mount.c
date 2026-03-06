@@ -498,6 +498,9 @@ static int is_mount_in_namespace(const char *path) {
   if (!f)
     return 0;
 
+  char io_buf[65536];
+  setvbuf(f, io_buf, _IOFBF, sizeof(io_buf));
+
   char line[4096];
   size_t path_len = strlen(path);
 

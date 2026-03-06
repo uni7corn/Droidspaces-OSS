@@ -63,17 +63,37 @@ static int find_self_cgroup_path(const char *controller, char *buf,
   return found ? 0 : -1;
 }
 
+static struct host_cgroup g_cached_cgroups[32];
+static int g_cached_cgroup_count = -1;
+
 /* Parse /proc/self/mountinfo to discover how the host has mounted cgroups.
  * This is the same approach LXC uses to be "data-driven" rather than guessing.
  */
 static int get_host_cgroups(struct host_cgroup *out, int max) {
+  if (g_cached_cgroup_count >= 0) {
+    int count_to_copy =
+        (g_cached_cgroup_count < max) ? g_cached_cgroup_count : max;
+    memcpy(out, g_cached_cgroups, count_to_copy * sizeof(struct host_cgroup));
+    return count_to_copy;
+  }
+
   FILE *f = fopen("/proc/self/mountinfo", "re");
   if (!f)
     return 0;
 
+  /* Android devices have thousands of bind mounts. Use a large buffer
+   * to swallow the whole file in one or two syscalls instead of 1KB chunks. */
+  char io_buf[65536];
+  setvbuf(f, io_buf, _IOFBF, sizeof(io_buf));
+
   char line[2048];
   int count = 0;
   while (fgets(line, sizeof(line), f) && count < max) {
+    /* Fast path rejection: if it doesn't mention cgroup anywhere, skip it
+     * immediately. */
+    if (!strstr(line, "cgroup"))
+      continue;
+
     /* mountinfo format: mountID parentID devID root mountPoint mountOptions
      * [optionalFields] - fsType mountSource superOptions */
     char *dash = strstr(line, " - ");
@@ -144,6 +164,12 @@ static int get_host_cgroups(struct host_cgroup *out, int max) {
     }
   }
   fclose(f);
+
+  /* Cache the discovered cgroups for future calls */
+  g_cached_cgroup_count = (count < 32) ? count : 32;
+  memcpy(g_cached_cgroups, out,
+         g_cached_cgroup_count * sizeof(struct host_cgroup));
+
   return count;
 }
 
