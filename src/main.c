@@ -8,6 +8,7 @@
 #include "droidspace.h"
 
 int ds_log_silent = 0;
+char ds_log_container_name[256] = "";
 
 /* ---------------------------------------------------------------------------
  * Usage / Help
@@ -525,6 +526,12 @@ int main(int argc, char **argv) {
   }
 
   const char *cmd = argv[optind];
+
+  /* Set up global logging context for centralized logging engine */
+  if (cfg.container_name[0] != '\0') {
+    safe_strncpy(ds_log_container_name, cfg.container_name,
+                 sizeof(ds_log_container_name));
+  }
 
   /* Prevent foreground mode in non-interactive environments for interactive
    * commands */

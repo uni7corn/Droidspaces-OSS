@@ -134,36 +134,20 @@
 #define C_BOLD "\033[1m"
 
 /* ---------------------------------------------------------------------------
- * Logging macros
+ * Logging macros & Centralized Engine
  * ---------------------------------------------------------------------------*/
 
 extern int ds_log_silent;
+extern char ds_log_container_name[256];
 
-#define ds_log(fmt, ...)                                                       \
-  do {                                                                         \
-    if (!ds_log_silent) {                                                      \
-      fprintf(stdout, "[" C_GREEN "+" C_RESET "] " fmt "\r\n", ##__VA_ARGS__); \
-      fflush(stdout);                                                          \
-    }                                                                          \
-  } while (0)
-#define ds_warn(fmt, ...)                                                      \
-  do {                                                                         \
-    if (!ds_log_silent) {                                                      \
-      fprintf(stderr, "[" C_YELLOW "!" C_RESET "] " fmt "\r\n",                \
-              ##__VA_ARGS__);                                                  \
-      fflush(stderr);                                                          \
-    }                                                                          \
-  } while (0)
-#define ds_error(fmt, ...)                                                     \
-  do {                                                                         \
-    fprintf(stderr, "[" C_RED "-" C_RESET "] " fmt "\r\n", ##__VA_ARGS__);     \
-    fflush(stderr);                                                            \
-  } while (0)
-#define ds_die(fmt, ...)                                                       \
-  do {                                                                         \
-    ds_error(fmt, ##__VA_ARGS__);                                              \
-    exit(EXIT_FAILURE);                                                        \
-  } while (0)
+void ds_log_internal(const char *prefix, const char *color, int is_err,
+                     const char *fmt, ...);
+void ds_die_internal(const char *fmt, ...);
+
+#define ds_log(fmt, ...) ds_log_internal("+", C_GREEN, 0, fmt, ##__VA_ARGS__)
+#define ds_warn(fmt, ...) ds_log_internal("!", C_YELLOW, 1, fmt, ##__VA_ARGS__)
+#define ds_error(fmt, ...) ds_log_internal("-", C_RED, 1, fmt, ##__VA_ARGS__)
+#define ds_die(fmt, ...) ds_die_internal(fmt, ##__VA_ARGS__)
 
 /* ---------------------------------------------------------------------------
  * Data structures

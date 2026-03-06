@@ -644,8 +644,9 @@ void check_kernel_recommendation(void) {
   }
 }
 
-void write_monitor_debug_log(const char *name, const char *fmt, ...) {
-  if (!name || !name[0] || !fmt)
+static void write_to_log_file(const char *name, const char *component,
+                              const char *raw_msg) {
+  if (!name || !name[0])
     return;
 
   char log_dir[PATH_MAX];
@@ -660,22 +661,78 @@ void write_monitor_debug_log(const char *name, const char *fmt, ...) {
   if (!f)
     return;
 
-  /* Timestamp */
   struct timespec ts;
   clock_gettime(CLOCK_REALTIME, &ts);
   struct tm tm;
   localtime_r(&ts.tv_sec, &tm);
-  fprintf(f, "[%04d-%02d-%02d %02d:%02d:%02d.%03ld] [ds-monitor] ",
+  fprintf(f, "[%04d-%02d-%02d %02d:%02d:%02d.%03ld] [%s] %s\n",
           tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min,
-          tm.tm_sec, ts.tv_nsec / 1000000);
+          tm.tm_sec, ts.tv_nsec / 1000000, component, raw_msg);
+  fclose(f);
+}
 
+void ds_log_internal(const char *prefix, const char *color, int is_err,
+                     const char *fmt, ...) {
+  char raw_msg[8192];
   va_list ap;
   va_start(ap, fmt);
-  vfprintf(f, fmt, ap);
+  vsnprintf(raw_msg, sizeof(raw_msg), fmt, ap);
   va_end(ap);
 
-  fputc('\n', f);
-  fclose(f);
+  /* Always log to file if container name is known */
+  if (ds_log_container_name[0]) {
+    write_to_log_file(ds_log_container_name, "main", raw_msg);
+  }
+
+  /* Decide if we should print to terminal */
+  if (ds_log_silent && !is_err)
+    return;
+
+  /* Filter out [DEBUG] and [IPT] prefixes from terminal output */
+  if (!is_err) {
+    if (strncmp(raw_msg, "[DEBUG]", 7) == 0 ||
+        strncmp(raw_msg, "[IPT]", 5) == 0 ||
+        strncmp(raw_msg, "[NET]", 5) == 0) {
+      return;
+    }
+  }
+
+  FILE *out = is_err ? stderr : stdout;
+  fprintf(out,
+          "["
+          "%s"
+          "%s" C_RESET "] %s\r\n",
+          color, prefix, raw_msg);
+  fflush(out);
+}
+
+void ds_die_internal(const char *fmt, ...) {
+  char raw_msg[8192];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(raw_msg, sizeof(raw_msg), fmt, ap);
+  va_end(ap);
+
+  if (ds_log_container_name[0]) {
+    write_to_log_file(ds_log_container_name, "fatal", raw_msg);
+  }
+
+  fprintf(stderr, "[" C_RED "-" C_RESET "] %s\r\n", raw_msg);
+  fflush(stderr);
+  exit(EXIT_FAILURE);
+}
+
+void write_monitor_debug_log(const char *name, const char *fmt, ...) {
+  if (!name || !name[0] || !fmt)
+    return;
+
+  char raw_msg[8192];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(raw_msg, sizeof(raw_msg), fmt, ap);
+  va_end(ap);
+
+  write_to_log_file(name, "monitor", raw_msg);
 }
 
 void print_ds_banner(void) {
