@@ -400,10 +400,11 @@ int internal_boot(struct ds_config *cfg) {
   /* 23b. Integration with /etc/profile.d for universal sourcing */
   if (access("/etc/profile.d", F_OK) == 0) {
     const char *profile_link = "/etc/profile.d/droidspaces_env.sh";
-    if (access(profile_link, F_OK) != 0) {
-      if (symlink("/run/droidspaces.env", profile_link) < 0) {
-        ds_warn("Failed to create profile.d symlink: %s", strerror(errno));
-      }
+    /* Always recreate — avoids TOCTOU and fixes stale symlinks after rootfs
+     * swap */
+    unlink(profile_link);
+    if (symlink("/run/droidspaces.env", profile_link) < 0 && errno != EEXIST) {
+      ds_warn("Failed to create profile.d symlink: %s", strerror(errno));
     }
   }
 

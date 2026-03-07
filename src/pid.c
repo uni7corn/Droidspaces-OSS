@@ -398,9 +398,14 @@ int show_containers(void) {
       pid_t pid;
       if (is_container_running(&tmp_cfg, &pid)) {
         if (count >= cap) {
+          if (cap > 8192) {
+            free(containers);
+            closedir(d);
+            return -1;
+          }
           cap *= 2;
           struct container_info *tmp =
-              realloc(containers, cap * sizeof(struct container_info));
+              realloc(containers, (size_t)cap * sizeof(struct container_info));
           if (!tmp) {
             free(containers);
             closedir(d);

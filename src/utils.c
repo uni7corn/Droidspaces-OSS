@@ -139,6 +139,13 @@ int write_file_atomic(const char *path, const char *content) {
   if (write_file(tmp, content) < 0)
     return -1;
 
+  /* fsync before rename — ensures data hits disk on Android before reboot */
+  int sync_fd = open(tmp, O_RDONLY | O_CLOEXEC);
+  if (sync_fd >= 0) {
+    fsync(sync_fd);
+    close(sync_fd);
+  }
+
   if (rename(tmp, path) < 0) {
     unlink(tmp);
     return -1;
