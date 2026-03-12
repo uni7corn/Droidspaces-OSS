@@ -25,7 +25,11 @@
 int ds_seccomp_apply_minimal(int hw_access) {
   (void)hw_access;
   struct sock_filter filter[] = {
-      /* Validate architecture */
+      /* Validate architecture.
+       * KILL on wrong arch - ALLOW was a bypass: on x86-64 a process can
+       * invoke 32-bit syscalls via int 0x80, which the kernel reports as
+       * AUDIT_ARCH_I386, causing the arch check to fail and the old ALLOW
+       * to skip the entire filter. KILL_PROCESS closes that hole. */
       BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
 #if defined(__aarch64__)
       BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_AARCH64, 1, 0),
@@ -36,11 +40,21 @@ int ds_seccomp_apply_minimal(int hw_access) {
 #elif defined(__i386__)
       BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_I386, 1, 0),
 #endif
-      BPF_STMT(BPF_RET | BPF_K,
-               SECCOMP_RET_ALLOW), /* wrong arch - passthrough */
+      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS), /* wrong arch */
 
       /* Load syscall number */
       BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
+
+#if defined(__x86_64__)
+      /* Block x32 ABI syscalls (nr >= 0x40000000).
+       * On x86-64 the x32 ABI uses the same arch value (AUDIT_ARCH_X86_64)
+       * but sets bit 30 in the syscall number. Without this check, a process
+       * can invoke x32 variants of any blocked syscall (e.g. x32 kexec_load)
+       * and bypass the filter entirely since the JEQ checks below only match
+       * the native 64-bit numbers. */
+      BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, 0x40000000, 0, 1),
+      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
+#endif
 
       /* Kernel module loading */
       BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_init_module, 0, 1),
@@ -141,6 +155,7 @@ int android_seccomp_setup(int is_systemd, int block_nested_ns) {
 
   /* Define base filter (arch check + load nr) */
   struct sock_filter filter_base[] = {
+      /* Same wrong-arch fix as ds_seccomp_apply_minimal: KILL on mismatch. */
       BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
 #if defined(__aarch64__)
       BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_AARCH64, 1, 0),
@@ -151,7 +166,7 @@ int android_seccomp_setup(int is_systemd, int block_nested_ns) {
 #elif defined(__i386__)
       BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_I386, 1, 0),
 #endif
-      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
+      BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS), /* wrong arch */
       BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, nr)),
   };
 
