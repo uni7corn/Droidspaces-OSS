@@ -48,14 +48,18 @@ void ds_apply_capability_hardening(int hw_access) {
   /* Standard Hardening Tier: drop capabilities that affect host stability
    * or allow escaping the container's isolation. */
   int caps_to_drop[] = {
-      CAP_SYS_RAWIO,     /* Raw hardware access (I/O ports, memory) */
-      CAP_SYS_PTRACE,    /* Process tracing/injection across namespaces */
-      CAP_SYS_PACCT,     /* Process accounting */
-      CAP_MAC_ADMIN,     /* Mandatory Access Control policy modification */
-      CAP_MAC_OVERRIDE,  /* Bypass MAC policies */
-      CAP_WAKE_ALARM,    /* Affect host power management / wakeups */
-      CAP_BLOCK_SUSPEND, /* Affect host power management / sleep */
-      CAP_AUDIT_READ,    /* Read kernel audit logs */
+      CAP_SYS_RAWIO,       /* Raw hardware access (I/O ports, memory) */
+      CAP_SYS_PTRACE,      /* Process tracing/injection across namespaces */
+      CAP_SYS_PACCT,       /* Process accounting */
+      CAP_MAC_ADMIN,       /* Mandatory Access Control policy modification */
+      CAP_MAC_OVERRIDE,    /* Bypass MAC policies */
+      CAP_WAKE_ALARM,      /* Affect host power management / wakeups */
+      CAP_BLOCK_SUSPEND,   /* Affect host power management / sleep */
+      CAP_AUDIT_READ,      /* Read kernel audit logs */
+      CAP_DAC_READ_SEARCH, /* Bypass file read/directory search permissions -
+                            * the other half of the Shocker escape: combined
+                            * with open_by_handle_at it allows reading any
+                            * file on the host outside the mount namespace. */
       -1};
 
   for (int i = 0; caps_to_drop[i] != -1; i++) {
