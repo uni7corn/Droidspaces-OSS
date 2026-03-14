@@ -107,6 +107,22 @@ fun ContainerTerminalScreen(
         }
     }
 
+    // Sync UI tabs with background service reality. 
+    // If sessions are killed externally (e.g. Notification Exit), remove them here.
+    LaunchedEffect(TerminalSessionService.globalSessionList.size) {
+        val currentGlobalIds = TerminalSessionService.globalSessionList.keys
+        val toRemove = tabs.filter { it.id !in currentGlobalIds }
+        if (toRemove.isNotEmpty()) {
+            val wasActiveRemoved = activeTabId in toRemove.map { it.id }
+            tabs.removeAll(toRemove)
+            if (tabs.isEmpty()) {
+                onNavigateBack()
+            } else if (wasActiveRemoved) {
+                activeTabId = tabs.last().id
+            }
+        }
+    }
+
     fun addTab(user: String) {
         val id = "${containerName}_${UUID.randomUUID().toString().take(8)}"
         val newTab = TerminalTab(id = id, user = user, label = "$user@$hostname")

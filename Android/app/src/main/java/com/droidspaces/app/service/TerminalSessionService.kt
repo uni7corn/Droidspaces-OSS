@@ -55,13 +55,17 @@ class TerminalSessionService : Service() {
                 // SIGKILL fires 300 ms later as a safety net for anything that
                 // didn't respond in time.
                 sessions[id]?.write("\u0004")
+
+                // Update UI state IMMEDIATELY to prevent "Restore" button glitches.
+                sessionList.remove(id)
+                globalSessionList.remove(id)
+                updateNotification()
+
                 android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                     runCatching {
                         sessions[id]?.apply { if (emulator != null) finishIfRunning() }
                         sessions.remove(id)
-                        sessionList.remove(id)
-                        globalSessionList.remove(id)
-                        if (sessions.isEmpty()) stopSelf() else updateNotification()
+                        if (sessions.isEmpty()) stopSelf()
                     }.onFailure { it.printStackTrace() }
                 }, 300)
             }.onFailure { it.printStackTrace() }
@@ -70,11 +74,15 @@ class TerminalSessionService : Service() {
         fun terminateAllSessions() {
             // EOF to all shells first - cleans up every su -> bash chain gracefully.
             sessions.values.forEach { it.write("\u0004") }
+
+            // Clear UI state IMMEDIATELY.
+            sessionList.clear()
+            globalSessionList.clear()
+            updateNotification()
+
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 sessions.values.forEach { it.finishIfRunning() }
                 sessions.clear()
-                sessionList.clear()
-                globalSessionList.clear()
                 stopSelf()
             }, 300)
         }
@@ -122,20 +130,7 @@ class TerminalSessionService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_EXIT -> {
-                sessions.values.forEach { it.finishIfRunning() }
-                sessions.clear()
-                sessionList.clear()
-                globalSessionList.clear()
-                wakeLock?.release()
-                wakeLock = null
-                // stopSelf() alone won't remove the notification while bound clients exist.
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                } else {
-                    @Suppress("DEPRECATION")
-                    stopForeground(true)
-                }
-                stopSelf()
+                binder.terminateAllSessions()
             }
             ACTION_WAKE_LOCK_TOGGLE -> binder.setWakeLock(!binder.isWakeLockHeld())
         }
