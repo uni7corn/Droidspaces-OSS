@@ -149,9 +149,8 @@ int fix_networking_host(struct ds_config *cfg) {
   /* Enable IPv4 forwarding */
   write_file("/proc/sys/net/ipv4/ip_forward", "1");
 
-  /* Re-enable IPv6 globally unless the user disabled it.
-   * No-op on fresh boots where IPv6 was never disabled. */
-  if (!cfg->disable_ipv6) {
+  /* Re-enable IPv6 globally only in host mode if not disabled */
+  if (cfg->net_mode == DS_NET_HOST && !cfg->disable_ipv6) {
     write_file("/proc/sys/net/ipv6/conf/all/disable_ipv6", "0");
     write_file("/proc/sys/net/ipv6/conf/default/disable_ipv6", "0");
   }
@@ -562,8 +561,9 @@ int fix_networking_rootfs(struct ds_config *cfg) {
   char hosts_content[1024];
   const char *hostname = (cfg->hostname[0]) ? cfg->hostname : "localhost";
 
-  /* Only strip IPv6 hosts entries when IPv6 is explicitly disabled */
-  if (!cfg->disable_ipv6 || cfg->net_mode != DS_NET_NAT) {
+  /* IPv6 is only enabled in host mode unless explicitly disabled */
+  int ipv6_enabled = (cfg->net_mode == DS_NET_HOST && !cfg->disable_ipv6);
+  if (ipv6_enabled) {
     snprintf(hosts_content, sizeof(hosts_content),
              "127.0.0.1\tlocalhost\n"
              "127.0.1.1\t%s\n"
@@ -599,13 +599,13 @@ int fix_networking_rootfs(struct ds_config *cfg) {
     ds_warn("Failed to link /etc/resolv.conf: %s", strerror(errno));
   }
 
-  if (cfg->disable_ipv6 && cfg->net_mode != DS_NET_HOST) {
-    write_file("/proc/sys/net/ipv6/conf/all/disable_ipv6", "1");
-    write_file("/proc/sys/net/ipv6/conf/default/disable_ipv6", "1");
-  } else if (cfg->disable_ipv6 && cfg->net_mode == DS_NET_HOST) {
-    /* In host mode, disabling IPv6 affects the host's netns. Warn and apply. */
-    ds_warn("--disable-ipv6 in host mode disables IPv6 on the host "
-            "network namespace.");
+  if (!ipv6_enabled) {
+    if (cfg->net_mode == DS_NET_HOST) {
+      /* In host mode, disabling IPv6 affects the host's netns. Warn and apply.
+       */
+      ds_warn("--disable-ipv6 in host mode disables IPv6 on the host "
+              "network namespace.");
+    }
     write_file("/proc/sys/net/ipv6/conf/all/disable_ipv6", "1");
     write_file("/proc/sys/net/ipv6/conf/default/disable_ipv6", "1");
   }
