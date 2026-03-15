@@ -73,6 +73,12 @@ void print_usage(void) {
       "mode)\n"
       "                            e.g. --port 22:22 --port 8096:8096/tcp\n");
   printf(
+      "      --nat-ip=IP           Assign a fixed IP to the container inside\n"
+      "                            the NAT subnet (" DS_DEFAULT_SUBNET ").\n"
+      "                            Auto-assigned and persisted on first boot\n"
+      "                            if omitted. Stable across reboots.\n"
+      "                            e.g. --nat-ip 172.28.5.10\n");
+  printf(
       "  -B, --bind-mount=SRC:DEST Bind mount host directory into container\n");
   printf("  -C, --conf=PATH           Load configuration from file\n");
   printf("      --reset               Reset config to defaults (keeps "
@@ -335,6 +341,7 @@ int main(int argc, char **argv) {
       {"upstream", required_argument, 0, 259},
       {"force-cgroupv1", no_argument, 0, 260},
       {"block-nested-namespaces", no_argument, 0, 261},
+      {"nat-ip", required_argument, 0, 262},
       {"reset", no_argument, 0, 256},
       {"help", no_argument, 0, 'v'},
       {0, 0, 0, 0}};
@@ -696,6 +703,20 @@ int main(int argc, char **argv) {
       /* --block-nested-namespaces: fix VFS deadlock manually */
       cfg.block_nested_ns = 1;
       break;
+
+    case 262: {
+      /* --nat-ip: static container IP inside the NAT subnet.
+       * Only a basic format check here - subnet + uniqueness validation
+       * happens in ds_net_resolve_static_ip() inside start_rootfs(). */
+      char _errbuf[128];
+      if (ds_net_validate_static_ip(optarg, _errbuf, sizeof(_errbuf)) != 0) {
+        ds_error("--nat-ip '%s' is invalid: %s", optarg, _errbuf);
+        ret = 1;
+        goto cleanup;
+      }
+      safe_strncpy(cfg.static_nat_ip, optarg, sizeof(cfg.static_nat_ip));
+      break;
+    }
 
     case '?':
       /* Ignore unknown options during override if we already found a cmd */

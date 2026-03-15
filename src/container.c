@@ -375,9 +375,31 @@ int start_rootfs(struct ds_config *cfg) {
 
   generate_uuid(cfg->uuid, sizeof(cfg->uuid));
 
-  /* Persist the new UUID to config immediately so disk always matches
-   * the running container. CLI overrides (e.g. -f) are already in cfg
-   * at this point since start_rootfs is called after argument parsing. */
+  /* Resolve and lock in the container's static NAT IP before the first save.
+   *
+   * Rules (enforced inside ds_net_resolve_static_ip):
+   *   1. If --nat-ip was given and passes validation + uniqueness -> keep it.
+   *   2. If --nat-ip was given but fails either check -> warn + auto-assign.
+   *   3. If static_nat_ip is already in config (previous boot) -> reuse it
+   *      (uniqueness check skips self, so restarts are always idempotent).
+   *   4. If none of the above -> derive from djb2(container_name), walk
+   *      forward until a free slot is found.
+   *
+   * Doing this here (pre-save, pre-fork) means:
+   *   - The IP is written to disk on the very first boot, even if the user
+   *     never passed --nat-ip. Every subsequent boot loads it from config.
+   *   - The monitor process inherits the fully resolved cfg struct so
+   *     setup_veth_host_side() and the DHCP server see the same IP without
+   *     any IPC needed.
+   *
+   * Only relevant for NAT mode -- host/none modes skip this cleanly. */
+  if (cfg->net_mode == DS_NET_NAT)
+    ds_net_resolve_static_ip(cfg);
+
+  /* Persist UUID and resolved static_nat_ip (for NAT) to config immediately
+   * so disk always matches the running container. CLI overrides (e.g. -f)
+   * are already in cfg at this point since start_rootfs() is called after
+   * argument parsing. */
   if (cfg->config_file[0]) {
     int was_new = !cfg->config_file_existed;
     if (ds_config_save(cfg->config_file, cfg) < 0) {
@@ -391,7 +413,7 @@ int start_rootfs(struct ds_config *cfg) {
     }
   }
 
-  /* Mirror to workspace so 'start -n <name>' works later without --conf */
+  /* Mirror to workspace so 'start -n <n>' works later without --conf */
   if (ds_config_save_by_name(cfg->container_name, cfg) < 0) {
     ds_warn("Failed to mirror configuration to workspace for '%s': %s",
             cfg->container_name, strerror(errno));
@@ -789,7 +811,7 @@ int start_rootfs(struct ds_config *cfg) {
 
         /* Send handshake to init */
         struct ds_net_handshake hs;
-        ds_net_derive_handshake(netns_pid, &hs);
+        ds_net_derive_handshake(netns_pid, cfg, &hs);
         ds_log("[NET] Monitor: sending DONE: peer=%s ip=%s", hs.peer_name,
                hs.ip_str);
         if (write(cfg->net_done_pipe[1], &hs, sizeof(hs)) !=

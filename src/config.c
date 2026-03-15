@@ -9,6 +9,7 @@
 
 /* Forward declarations */
 static void add_unknown_line(struct ds_config *cfg, const char *line);
+/* ds_net_validate_static_ip is defined in network.c - declared in droidspace.h */
 #include <libgen.h>
 
 /* ---------------------------------------------------------------------------
@@ -227,6 +228,14 @@ int ds_config_load(const char *config_path, struct ds_config *cfg) {
       safe_strncpy(cfg->env_file, val, sizeof(cfg->env_file));
     } else if (strcmp(key, "uuid") == 0) {
       safe_strncpy(cfg->uuid, val, sizeof(cfg->uuid));
+    } else if (strcmp(key, "static_nat_ip") == 0) {
+      /* Validate on load - reject obviously malformed values stored by older
+       * builds or hand-edited configs so we never boot with a garbage IP. */
+      char _errbuf[128];
+      if (val[0] && ds_net_validate_static_ip(val, _errbuf, sizeof(_errbuf)) == 0)
+        safe_strncpy(cfg->static_nat_ip, val, sizeof(cfg->static_nat_ip));
+      else if (val[0])
+        ds_warn("config: ignoring invalid static_nat_ip '%s': %s", val, _errbuf);
     } else if (strcmp(key, "net_mode") == 0) {
       if (strcmp(val, "nat") == 0) {
         cfg->net_mode = DS_NET_NAT;
@@ -429,6 +438,12 @@ int ds_config_save(const char *config_path, struct ds_config *cfg) {
     }
     fprintf(f_out, "\n");
   }
+
+  /* Persist the resolved static NAT IP so every subsequent boot reuses
+   * the same address.  Written for all NAT containers (user-supplied or
+   * auto-assigned); skipped for host/none modes where it's irrelevant. */
+  if (cfg->net_mode == DS_NET_NAT && cfg->static_nat_ip[0])
+    fprintf(f_out, "static_nat_ip=%s\n", cfg->static_nat_ip);
 
   if (cfg->env_file[0])
     fprintf(f_out, "env_file=%s\n", cfg->env_file);

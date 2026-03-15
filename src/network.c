@@ -103,9 +103,18 @@ static int iface_matches_pattern(const char *pattern, const char *iface) {
  * Public helper: populate a ds_net_handshake from a container init PID
  * ---------------------------------------------------------------------------*/
 
-void ds_net_derive_handshake(pid_t init_pid, struct ds_net_handshake *hs) {
+void ds_net_derive_handshake(pid_t init_pid, struct ds_config *cfg,
+                             struct ds_net_handshake *hs) {
   veth_peer_name(init_pid, hs->peer_name, sizeof(hs->peer_name));
-  veth_peer_ip(init_pid, hs->ip_str, sizeof(hs->ip_str));
+  /* Use the already-resolved static IP - not the PID-hash fallback.
+   * ip_str is informational on the child side (voided in
+   * setup_veth_child_side_named) but the boot.c log line prints it,
+   * so it should reflect the actual IP the DHCP server will offer. */
+  if (cfg && cfg->static_nat_ip[0])
+    safe_strncpy(hs->ip_str, cfg->static_nat_ip, sizeof(hs->ip_str));
+  else
+    veth_peer_ip(init_pid, hs->ip_str,
+                 sizeof(hs->ip_str)); /* last-resort fallback */
 }
 
 /* ---------------------------------------------------------------------------
@@ -141,6 +150,181 @@ int ds_get_dns_servers(const char *custom_dns, char *out, size_t size) {
   }
 
   return count;
+}
+
+/* ---------------------------------------------------------------------------
+ * Static NAT IP: validation, collision check, and resolution
+ * ---------------------------------------------------------------------------*/
+
+int ds_net_validate_static_ip(const char *ip_str, char *errbuf,
+                              size_t errsize) {
+  if (!ip_str || !ip_str[0]) {
+    snprintf(errbuf, errsize, "empty IP string");
+    return -1;
+  }
+
+  /* Reject CIDR notation - we store plain dotted-decimal */
+  if (strchr(ip_str, '/')) {
+    snprintf(errbuf, errsize,
+             "pass plain IP without prefix length "
+             "(e.g. 172.28.5.10, not 172.28.5.10/16)");
+    return -1;
+  }
+
+  struct in_addr addr;
+  if (inet_pton(AF_INET, ip_str, &addr) != 1) {
+    snprintf(errbuf, errsize, "not a valid IPv4 address");
+    return -1;
+  }
+
+  int o1, o2, o3, o4;
+  if (sscanf(ip_str, "%d.%d.%d.%d", &o1, &o2, &o3, &o4) != 4) {
+    snprintf(errbuf, errsize, "malformed IPv4 address");
+    return -1;
+  }
+
+  /* Must be inside 172.28.0.0/16 */
+  if (o1 != 172 || o2 != 28) {
+    snprintf(errbuf, errsize,
+             "must be inside the NAT subnet " DS_DEFAULT_SUBNET " (got %s)",
+             ip_str);
+    return -1;
+  }
+
+  /* Octet3: reserve row 0 entirely for gateway/infrastructure (172.28.0.x) */
+  if (o3 < 1 || o3 > 254) {
+    snprintf(errbuf, errsize,
+             "third octet %d out of range - must be 1-254 "
+             "(172.28.0.x is reserved for the gateway)",
+             o3);
+    return -1;
+  }
+
+  /* Octet4: exclude network address (0) and broadcast (255) */
+  if (o4 < 1 || o4 > 254) {
+    snprintf(errbuf, errsize, "fourth octet %d out of range - must be 1-254",
+             o4);
+    return -1;
+  }
+
+  return 0;
+}
+
+int ds_net_check_ip_collision(const char *ip_str, const char *exclude_name) {
+  char containers_dir[PATH_MAX];
+  snprintf(containers_dir, sizeof(containers_dir), "%s/Containers",
+           get_workspace_dir());
+
+  /* The directory entries are sanitized names (written by
+   * ds_config_save_by_name via sanitize_container_name). Sanitize exclude_name
+   * the same way so the self-skip comparison is always apples-to-apples. */
+  char safe_exclude[256] = {0};
+  if (exclude_name && exclude_name[0])
+    sanitize_container_name(exclude_name, safe_exclude, sizeof(safe_exclude));
+
+  DIR *d = opendir(containers_dir);
+  if (!d)
+    return 0; /* Can't scan → assume unique */
+
+  struct dirent *ent;
+  int collision = 0;
+
+  while ((ent = readdir(d)) != NULL && !collision) {
+    if (ent->d_name[0] == '.')
+      continue;
+    /* Skip the container being configured so it can keep its own IP on restart
+     */
+    if (safe_exclude[0] && strcmp(ent->d_name, safe_exclude) == 0)
+      continue;
+
+    /* config_path must hold: containers_dir (PATH_MAX-1) + '/' +
+     * ent->d_name (NAME_MAX = 255) + "/container.config" (18) + NUL.
+     * A plain PATH_MAX buffer overflows that worst case - use an explicit
+     * worst-case size so -Werror=format-truncation is satisfied. */
+    char config_path[PATH_MAX + NAME_MAX + 32];
+    snprintf(config_path, sizeof(config_path), "%s/%s/container.config",
+             containers_dir, ent->d_name);
+
+    struct ds_config other;
+    memset(&other, 0, sizeof(other));
+    other.net_ready_pipe[0] = other.net_ready_pipe[1] = -1;
+    other.net_done_pipe[0] = other.net_done_pipe[1] = -1;
+
+    if (ds_config_load(config_path, &other) == 0) {
+      if (other.static_nat_ip[0] && strcmp(other.static_nat_ip, ip_str) == 0)
+        collision = 1;
+      free_config_binds(&other);
+      free_config_env_vars(&other);
+      free_config_unknown_lines(&other);
+    }
+  }
+
+  closedir(d);
+  return collision;
+}
+
+/* Internal: derive a unique IP via djb2(container_name), walking forward on
+ * collision.  Deterministic on first boot → same row every time the same
+ * container name is used, spreading containers across the /16. */
+static void ds_net_auto_assign_ip(struct ds_config *cfg) {
+  uint32_t hash = 5381;
+  for (const char *p = cfg->container_name; *p; p++)
+    hash = ((hash << 5) + hash) ^ (unsigned char)*p;
+
+  int o3 = (int)((hash >> 8) % 254) + 1; /* 1-254 */
+  int o4 = (int)(hash % 254) + 1;        /* 1-254 */
+
+  /* Walk up to a full /16 to find an unoccupied slot */
+  for (int attempts = 0; attempts < 254 * 254; attempts++) {
+    char candidate[INET_ADDRSTRLEN];
+    snprintf(candidate, sizeof(candidate), "172.28.%d.%d", o3, o4);
+
+    if (ds_net_check_ip_collision(candidate, cfg->container_name) == 0) {
+      safe_strncpy(cfg->static_nat_ip, candidate, sizeof(cfg->static_nat_ip));
+      return;
+    }
+
+    if (++o4 > 254) {
+      o4 = 1;
+      if (++o3 > 254)
+        o3 = 1;
+    }
+  }
+
+  /* Subnet is completely exhausted - reuse hash address as last resort */
+  snprintf(cfg->static_nat_ip, sizeof(cfg->static_nat_ip), "172.28.%d.%d", o3,
+           o4);
+  ds_warn("[NET] NAT subnet appears fully allocated - reusing %s as fallback",
+          cfg->static_nat_ip);
+}
+
+void ds_net_resolve_static_ip(struct ds_config *cfg) {
+  char errbuf[256];
+
+  if (cfg->static_nat_ip[0]) {
+    /* IP already set - from --nat-ip flag or loaded from a previous boot.
+     * Re-validate in case the config was hand-edited since last boot. */
+    if (ds_net_validate_static_ip(cfg->static_nat_ip, errbuf, sizeof(errbuf)) !=
+        0) {
+      ds_warn("[NET] static_nat_ip '%s' failed validation: %s "
+              "- auto-assigning a new IP",
+              cfg->static_nat_ip, errbuf);
+      cfg->static_nat_ip[0] = '\0';
+
+    } else if (ds_net_check_ip_collision(cfg->static_nat_ip,
+                                         cfg->container_name)) {
+      ds_warn("[NET] static_nat_ip '%s' is already assigned to another "
+              "container - auto-assigning a new IP",
+              cfg->static_nat_ip);
+      cfg->static_nat_ip[0] = '\0';
+    }
+  }
+
+  if (!cfg->static_nat_ip[0])
+    ds_net_auto_assign_ip(cfg);
+
+  ds_log("[NET] Container '%s' → static NAT IP: %s (persisted to config)",
+         cfg->container_name, cfg->static_nat_ip);
 }
 
 int fix_networking_host(struct ds_config *cfg) {
@@ -384,15 +568,19 @@ int setup_veth_host_side(struct ds_config *cfg, pid_t child_pid) {
     if (ds_nl_link_up(ctx, veth_host) < 0)
       ds_warn("[NET] Failed to bring up %s", veth_host);
 
-    /* Add route for container IP to this veth */
-    char peer_ip_cidr[32];
-    veth_peer_ip(child_pid, peer_ip_cidr, sizeof(peer_ip_cidr));
-    uint32_t peer_ip, peer_mask;
-    parse_cidr(peer_ip_cidr, &peer_ip, &peer_mask);
-
-    if (ds_nl_add_route4(ctx, peer_ip, 32, 0,
-                         ds_nl_get_ifindex(ctx, veth_host)) < 0)
-      ds_warn("[NET] Bridgeless: Failed to add route for %s", peer_ip_cidr);
+    /* Add host route for the container's static IP to this veth.
+     * cfg->static_nat_ip is already resolved and persisted before fork. */
+    struct in_addr peer_in;
+    if (inet_pton(AF_INET, cfg->static_nat_ip, &peer_in) == 1) {
+      if (ds_nl_add_route4(ctx, peer_in.s_addr, 32, 0,
+                           ds_nl_get_ifindex(ctx, veth_host)) < 0)
+        ds_warn("[NET] Bridgeless: Failed to add route for %s",
+                cfg->static_nat_ip);
+    } else {
+      ds_warn("[NET] Bridgeless: static_nat_ip '%s' is not parseable - "
+              "no host route installed",
+              cfg->static_nat_ip);
+    }
   }
 
   /* Ensure veth_host is UP (redundant if bridgeless but safe) */
@@ -468,29 +656,36 @@ int setup_veth_host_side(struct ds_config *cfg, pid_t child_pid) {
   ds_nl_close(ctx);
 
   /* 8. Start embedded DHCP server so the container's DHCP client acquires
-   * the same deterministic IP that veth_peer_ip() computed for routing.
+   * the static IP persisted in cfg->static_nat_ip.  Using a stable IP here
+   * means every reboot the container gets the same address - no PREROUTING
+   * rule churn, no "wrong IP" on the first DHCP renew.
    *
    * Binding interface depends on topology:
    *   Bridge mode    — bind to ds-br0.  veth_host is a bridge slave; the
    *                    kernel delivers frames from the container upward to
    *                    the bridge interface, not the slave.  A socket bound
-   *                    to the slave never sees the DHCP DISCOVERs.
+   *                    to the slave would never see the DHCP DISCOVERs.
    *   Bridgeless mode — bind to veth_host directly (point-to-point veth,
    *                    no bridge in the path). */
   {
-    char peer_ip_cidr[32];
-    veth_peer_ip(child_pid, peer_ip_cidr, sizeof(peer_ip_cidr));
-    uint32_t offer_ip = 0, dummy_mask = 0;
-    parse_cidr(peer_ip_cidr, &offer_ip, &dummy_mask);
+    struct in_addr offer_in;
+    uint32_t offer_ip = 0;
+    if (inet_pton(AF_INET, cfg->static_nat_ip, &offer_in) == 1) {
+      offer_ip = offer_in.s_addr;
+    } else {
+      ds_warn("[NET] DHCP: static_nat_ip '%s' unparseable - "
+              "DHCP server will offer 0.0.0.0 (container boot will fail)",
+              cfg->static_nat_ip);
+    }
+
     const char *dhcp_iface = cfg->net_bridgeless ? veth_host : DS_NAT_BRIDGE;
     ds_dhcp_server_start(cfg, dhcp_iface, offer_ip, inet_addr(DS_NAT_GW_IP),
                          peer_mac);
 
-    /* Store the container IP string for port forward cleanup later */
-    struct in_addr offer_addr;
-    offer_addr.s_addr = offer_ip;
-    inet_ntop(AF_INET, &offer_addr, cfg->nat_container_ip,
-              sizeof(cfg->nat_container_ip));
+    /* Store the container IP string (plain dotted-decimal) for port-forward
+     * cleanup later.  static_nat_ip is already in that exact format. */
+    safe_strncpy(cfg->nat_container_ip, cfg->static_nat_ip,
+                 sizeof(cfg->nat_container_ip));
 
     /* Install DNAT + FORWARD rules for any --port mappings */
     if (cfg->port_forward_count > 0)

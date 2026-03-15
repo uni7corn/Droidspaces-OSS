@@ -319,8 +319,12 @@ struct ds_config {
   /* Port forwarding (--port HOST:CONTAINER[/proto]) */
   struct ds_port_forward port_forwards[DS_MAX_PORT_FORWARDS];
   int port_forward_count;
-  char nat_container_ip[INET_ADDRSTRLEN]; /* assigned container IP, for cleanup
-                                           */
+  char nat_container_ip[INET_ADDRSTRLEN]; /* assigned container IP, for cleanup */
+
+  /* Static NAT IP (--nat-ip, or auto-assigned on first boot and persisted).
+   * Once set in container.config, this IP is reused on every subsequent boot
+   * instead of re-deriving a PID-hash IP.  Plain dotted-decimal, no CIDR. */
+  char static_nat_ip[INET_ADDRSTRLEN];
 
   /* Upstream interfaces for NAT routing (--upstream wlan0,rmnet0,...) */
   char upstream_ifaces[DS_MAX_UPSTREAM_IFACES][IFNAMSIZ];
@@ -458,7 +462,11 @@ int fix_networking_rootfs(struct ds_config *cfg);
 int setup_veth_host_side(struct ds_config *cfg, pid_t child_pid);
 int setup_veth_child_side_named(struct ds_config *cfg, const char *peer_name,
                                 const char *ip_str);
-void ds_net_derive_handshake(pid_t init_pid, struct ds_net_handshake *hs);
+/* Populate a ds_net_handshake from a container init PID + resolved config.
+ * peer_name is derived from the PID (stable per-boot interface name).
+ * ip_str    is taken from cfg->static_nat_ip (stable across boots). */
+void ds_net_derive_handshake(pid_t init_pid, struct ds_config *cfg,
+                             struct ds_net_handshake *hs);
 void ds_net_cleanup(struct ds_config *cfg, pid_t container_pid);
 void ds_net_start_route_monitor(void);
 int ds_net_disable_tx_checksum(const char *ifname);
@@ -510,6 +518,31 @@ int ds_ipt_remove_iface_rules(const char *iface);
 int ds_ipt_remove_ds_rules(void);
 int ds_ipt_add_portforwards(struct ds_config *cfg, const char *container_ip);
 int ds_ipt_remove_portforwards(struct ds_config *cfg);
+
+/* ---------------------------------------------------------------------------
+ * Static NAT IP management (network.c)
+ * ---------------------------------------------------------------------------*/
+
+/* Validate a user-supplied static NAT IP string.
+ * Must be a valid IPv4 address inside DS_DEFAULT_SUBNET (172.28.0.0/16),
+ * with octet3 in 1-254 and octet4 in 1-254 (excludes gateway row .0.x).
+ * Returns 0 on success, -1 on failure (reason written to errbuf). */
+int ds_net_validate_static_ip(const char *ip_str, char *errbuf, size_t errsize);
+
+/* Scan all container.config files in the workspace for a static_nat_ip
+ * collision.  exclude_name (the current container) is skipped.
+ * Returns 0 if ip_str is unique across all other configs, 1 if collision. */
+int ds_net_check_ip_collision(const char *ip_str, const char *exclude_name);
+
+/* Called from start_rootfs() before the first config save and before fork.
+ * Resolves cfg->static_nat_ip:
+ *   - If user provided --nat-ip: validate + uniqueness check; fall back to
+ *     auto-assign on failure.
+ *   - If not provided (or fell back): derive a name-based deterministic IP,
+ *     then walk forward until a unique slot is found.
+ * After this call cfg->static_nat_ip is always a valid, unique IP string.
+ * Callers must save config after this returns to persist the result. */
+void ds_net_resolve_static_ip(struct ds_config *cfg);
 
 /* ---------------------------------------------------------------------------
  * ds_dhcp.c

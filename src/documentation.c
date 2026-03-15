@@ -330,6 +330,11 @@ static void print_page(int page, const char *bin) {
     printf("  %s -r rootfs/ --net=nat --upstream=v4-rmnet_data* start\n", bin);
     printf("  %s -r rootfs/ --net=nat --upstream=wlan0 --port=22:22 start\n",
            bin);
+    printf("  %s -r rootfs/ --net=nat --upstream=wlan0 --nat-ip=172.28.5.10 start\n",
+           bin);
+    printf("  # --nat-ip assigns a fixed container IP (persisted to config).\n");
+    printf("  # Omit it and Droidspaces auto-assigns a stable IP from the\n");
+    printf("  # container name - same IP on every reboot, no manual config needed.\n");
     printf("  (NAT creates an isolated namespace with internet access)\n\n");
 
     printf("%sForce Legacy Cgroup V1 Hierarchy:%s\n", bold, reset);
