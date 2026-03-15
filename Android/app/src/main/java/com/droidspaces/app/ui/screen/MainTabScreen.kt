@@ -25,6 +25,7 @@ import com.droidspaces.app.util.PreferencesManager
 import com.droidspaces.app.util.SystemInfoManager
 import com.droidspaces.app.ui.viewmodel.AppStateViewModel
 import com.droidspaces.app.ui.viewmodel.ContainerViewModel
+import com.droidspaces.app.ui.component.HelpCard
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -435,6 +436,11 @@ private fun HomeTabContent(
             }
 
             SystemInfoCard(refreshTrigger = refreshTrigger)
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            HelpCard()
+
             Spacer(modifier = Modifier.height(16.dp))
         }
     }
