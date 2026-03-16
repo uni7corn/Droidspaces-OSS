@@ -229,6 +229,15 @@ static void cleanup_container_resources(struct ds_config *cfg, pid_t pid,
   if (cfg->net_mode == DS_NET_NAT) {
     ds_net_cleanup(cfg, pid > 0 ? pid : cfg->container_pid);
   }
+
+  /* Cgroup subtree cleanup: remove /sys/fs/cgroup/droidspaces/<name>/.
+   * All container processes are dead by now so every leaf is empty and
+   * the bottom-up rmdir walk always succeeds.  Skipped on restart
+   * (skip_unmount=1) so the monitor's cgroup context stays intact for
+   * the next boot cycle. */
+  if (!skip_unmount) {
+    ds_cgroup_cleanup_container(cfg->container_name);
+  }
 }
 
 /* ---------------------------------------------------------------------------
@@ -573,9 +582,12 @@ int start_rootfs(struct ds_config *cfg) {
        * will be the host's root, providing zero isolation.
        * We use a container-specific path to avoid conflicts. */
       if (access("/sys/fs/cgroup/cgroup.procs", F_OK) == 0) {
+        char safe_name[256];
+        sanitize_container_name(cfg->container_name, safe_name,
+                                sizeof(safe_name));
         char cg_path[PATH_MAX];
         snprintf(cg_path, sizeof(cg_path), "/sys/fs/cgroup/droidspaces/%s",
-                 cfg->container_name);
+                 safe_name);
         mkdir_p(cg_path, 0755);
 
         char cg_procs[PATH_MAX];
@@ -1438,6 +1450,7 @@ int enter_rootfs(struct ds_config *cfg, const char *user) {
   if (master_fd < 0) {
     ds_error("Failed to receive PTY master from child");
     waitpid(child, NULL, 0);
+    ds_cgroup_detach(child);
     return -1;
   }
 
@@ -1462,6 +1475,7 @@ int enter_rootfs(struct ds_config *cfg, const char *user) {
 
   close(master_fd);
   waitpid(child, NULL, 0);
+  ds_cgroup_detach(child);
   free_config_env_vars(cfg);
   return 0;
 }
@@ -1566,6 +1580,7 @@ int run_in_rootfs(struct ds_config *cfg, int argc, char **argv) {
 
   int status;
   waitpid(child, &status, 0);
+  ds_cgroup_detach(child);
   free_config_env_vars(cfg);
   return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }

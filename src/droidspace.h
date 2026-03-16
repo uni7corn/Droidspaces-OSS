@@ -438,6 +438,10 @@ int ds_cgroup_v2_usable(void);
 int ds_cgroup_host_is_v2(void);
 int setup_cgroups(int is_systemd, int force_cgroupv1);
 int ds_cgroup_attach(pid_t target_pid);
+/* Remove the ds-enter-<child_pid> leaf cgroup after an enter/run session. */
+void ds_cgroup_detach(pid_t child_pid);
+/* Remove the entire /sys/fs/cgroup/droidspaces/<name>/ subtree on stop. */
+void ds_cgroup_cleanup_container(const char *container_name);
 
 /* ---------------------------------------------------------------------------
  * hardware.c

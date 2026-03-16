@@ -513,3 +513,159 @@ int ds_cgroup_attach(pid_t target_pid) {
 
   return 0;
 }
+
+/* ---------------------------------------------------------------------------
+ * ds_cgroup_detach
+ *
+ * Removes the ds-enter-<pid> leaf cgroup directories that ds_cgroup_attach()
+ * created for a single enter/run session.  Must be called by the parent after
+ * waitpid() so the leaf is guaranteed to be empty.
+ * ---------------------------------------------------------------------------*/
+void ds_cgroup_detach(pid_t child_pid) {
+  struct host_cgroup hosts[32];
+  int n = get_host_cgroups(hosts, 32);
+
+  char enter_suffix[32];
+  snprintf(enter_suffix, sizeof(enter_suffix), "/ds-enter-%d", (int)child_pid);
+
+  for (int i = 0; i < n; i++) {
+    char ds_dir[PATH_MAX];
+    safe_strncpy(ds_dir, hosts[i].mountpoint, sizeof(ds_dir));
+    strncat(ds_dir, "/droidspaces", sizeof(ds_dir) - strlen(ds_dir) - 1);
+
+    DIR *top = opendir(ds_dir);
+    if (!top) {
+      char direct[PATH_MAX];
+      safe_strncpy(direct, hosts[i].mountpoint, sizeof(direct));
+      strncat(direct, enter_suffix, sizeof(direct) - strlen(direct) - 1);
+      rmdir(direct);
+      continue;
+    }
+
+    struct dirent *de;
+    while ((de = readdir(top)) != NULL) {
+      if (de->d_name[0] == '.')
+        continue;
+      char leaf[PATH_MAX];
+      safe_strncpy(leaf, ds_dir, sizeof(leaf));
+      strncat(leaf, "/", sizeof(leaf) - strlen(leaf) - 1);
+      strncat(leaf, de->d_name, sizeof(leaf) - strlen(leaf) - 1);
+      strncat(leaf, enter_suffix, sizeof(leaf) - strlen(leaf) - 1);
+      rmdir(leaf);
+    }
+    closedir(top);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * ds_cgroup_cleanup_container
+ *
+ * Removes the entire /sys/fs/cgroup/droidspaces/<container_name>/ subtree
+ * that was created at container start for cgroup namespace isolation.
+ *
+ * The kernel requires a bottom-up rmdir walk — a cgroup directory can only
+ * be removed after all its children are gone.  All container processes are
+ * dead by the time cleanup_container_resources() calls this, so every leaf
+ * is empty and the walk always succeeds.
+ *
+ * Safe to call on every stop regardless of whether the directory exists
+ * (all rmdir calls are silently ignored on ENOENT).
+ * ---------------------------------------------------------------------------*/
+
+/* Recursive bottom-up rmdir of a cgroup subtree.  cgroup directories can
+ * only be removed from the leaves upward — attempting to rmdir a non-empty
+ * cgroup returns EBUSY.
+ *
+ * Even after all processes exit, cgroup state is destroyed asynchronously
+ * by the kernel.  Child dirs enter a "dying" state that is invisible to
+ * readdir() but still causes the parent's rmdir() to return EBUSY.
+ *
+ * We handle this with two mechanisms:
+ *   1. cgroup.kill (kernel 5.14+): write "1" to kill all remaining
+ *      processes in the subtree atomically, then poll cgroup.events
+ *      until populated=0 before attempting rmdir.
+ *   2. Retry loop: for older kernels without cgroup.kill, retry rmdir
+ *      with short sleeps to let the async cleanup complete. */
+static void rmdir_cgroup_tree(const char *path) {
+  DIR *d = opendir(path);
+  if (!d) {
+    rmdir(path);
+    return;
+  }
+
+  struct dirent *de;
+  while ((de = readdir(d)) != NULL) {
+    if (de->d_name[0] == '.')
+      continue;
+    if (de->d_type != DT_DIR)
+      continue;
+
+    char child[PATH_MAX];
+    safe_strncpy(child, path, sizeof(child));
+    strncat(child, "/", sizeof(child) - strlen(child) - 1);
+    strncat(child, de->d_name, sizeof(child) - strlen(child) - 1);
+    rmdir_cgroup_tree(child);
+  }
+  closedir(d);
+
+  /* 1. cgroup.kill — available on kernel 5.14+.
+   *    Writing "1" sends SIGKILL to every process in the subtree
+   *    atomically, including those in dying child cgroups. */
+  char kill_path[PATH_MAX];
+  safe_strncpy(kill_path, path, sizeof(kill_path));
+  strncat(kill_path, "/cgroup.kill", sizeof(kill_path) - strlen(kill_path) - 1);
+  if (access(kill_path, W_OK) == 0) {
+    int kfd = open(kill_path, O_WRONLY | O_CLOEXEC);
+    if (kfd >= 0) {
+      write(kfd, "1", 1);
+      close(kfd);
+    }
+  }
+
+  /* 2. Poll cgroup.events for populated=0.
+   *    Bail out after ~500ms (50 × 10ms) to avoid blocking forever. */
+  char events_path[PATH_MAX];
+  safe_strncpy(events_path, path, sizeof(events_path));
+  strncat(events_path, "/cgroup.events",
+          sizeof(events_path) - strlen(events_path) - 1);
+  for (int i = 0; i < 50; i++) {
+    char buf[256] = {0};
+    if (read_file(events_path, buf, sizeof(buf)) > 0) {
+      if (strstr(buf, "populated 0"))
+        break;
+    }
+    usleep(10000); /* 10 ms */
+  }
+
+  /* 3. rmdir with retry — handles residual dying descendants on older
+   *    kernels that lack cgroup.kill.  10 attempts × 20 ms = 200 ms max. */
+  for (int attempt = 0; attempt < 10; attempt++) {
+    if (rmdir(path) == 0 || errno == ENOENT)
+      return;
+    if (errno != EBUSY)
+      return;      /* unexpected error — give up */
+    usleep(20000); /* 20 ms */
+  }
+}
+
+void ds_cgroup_cleanup_container(const char *container_name) {
+  if (!container_name || !container_name[0])
+    return;
+
+  struct host_cgroup hosts[32];
+  int n = get_host_cgroups(hosts, 32);
+
+  char safe_name[256];
+  sanitize_container_name(container_name, safe_name, sizeof(safe_name));
+
+  for (int i = 0; i < n; i++) {
+    char cg_path[PATH_MAX];
+    safe_strncpy(cg_path, hosts[i].mountpoint, sizeof(cg_path));
+    strncat(cg_path, "/droidspaces/", sizeof(cg_path) - strlen(cg_path) - 1);
+    strncat(cg_path, safe_name, sizeof(cg_path) - strlen(cg_path) - 1);
+
+    if (access(cg_path, F_OK) != 0)
+      continue; /* nothing to clean on this hierarchy */
+    rmdir_cgroup_tree(cg_path);
+  }
+}
