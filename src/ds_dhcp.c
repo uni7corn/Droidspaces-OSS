@@ -23,8 +23,15 @@
 #include "droidspace.h"
 
 #include <arpa/inet.h>
+#include <linux/if_packet.h>
+#include <net/ethernet.h>
 #include <net/if.h>
 #include <netinet/in.h>
+#include <netinet/ip.h>
+#include <netinet/udp.h>
+#include <poll.h>
+#include <sys/eventfd.h>
+#include <sys/ioctl.h>
 
 /* ---------------------------------------------------------------------------
  * DHCP wire protocol constants  (RFC 2131 / RFC 2132)
@@ -95,15 +102,17 @@ struct dhcp_pkt {
 
 typedef struct {
   int sock;
+  int stop_efd;
   char iface[IFNAMSIZ];
-  uint32_t offer_ip_be; /* container IP, network byte order */
-  uint32_t gw_ip_be;    /* DS_NAT_GW_IP, network byte order  */
-  uint32_t netmask_be;  /* 255.255.0.0 for /16               */
-  uint32_t dns1_be;
-  uint32_t dns2_be;
-  uint8_t peer_mac[6]; /* only respond to this client MAC */
+  uint32_t offer_ip_be;  /* IP we are offering */
+  uint32_t gw_ip_be;     /* Gateway IP (usually bridge IP) */
+  uint32_t netmask_be;   /* 255.255.0.0 for /16               */
+  uint32_t dns1_be;      /* DNS 1 */
+  uint32_t dns2_be;      /* DNS 2 */
+  uint8_t peer_mac[6];   /* Container's MAC */
+  uint8_t server_mac[6]; /* Bridge's MAC */
   volatile sig_atomic_t stop;
-  pthread_t tid;
+  pthread_t tid; /* Server thread ID */
 } ds_dhcp_ctx_t;
 
 static ds_dhcp_ctx_t g_dhcp;
@@ -158,6 +167,23 @@ static int opt_get(const uint8_t *opts, int opts_len, uint8_t code,
     i += (int)l;
   }
   return -1;
+}
+
+/* ---------------------------------------------------------------------------
+ * Checksum helpers
+ * ---------------------------------------------------------------------------*/
+static uint16_t checksum(const void *data, size_t len) {
+  uint32_t sum = 0;
+  const uint16_t *buf = (const uint16_t *)data;
+  while (len > 1) {
+    sum += *buf++;
+    len -= 2;
+  }
+  if (len == 1)
+    sum += *(const uint8_t *)buf;
+  while (sum >> 16)
+    sum = (sum & 0xFFFF) + (sum >> 16);
+  return (uint16_t)(~sum);
 }
 
 /* ---------------------------------------------------------------------------
@@ -222,15 +248,60 @@ static int build_reply(struct dhcp_pkt *reply, const struct dhcp_pkt *req,
  * dependency during initial address acquisition.
  * ---------------------------------------------------------------------------*/
 
-static int send_reply(int sock, const struct dhcp_pkt *pkt, int pkt_len) {
-  struct sockaddr_in dst;
-  memset(&dst, 0, sizeof(dst));
-  dst.sin_family = AF_INET;
-  dst.sin_port = htons(DHCP_CLIENT_PORT);
-  dst.sin_addr.s_addr = htonl(INADDR_BROADCAST);
+static int send_reply(int sock, int ifindex, const struct dhcp_pkt *pkt,
+                      int pkt_len, const ds_dhcp_ctx_t *ctx) {
+  uint8_t frame[2048];
+  struct ethhdr *eth = (struct ethhdr *)frame;
+  struct iphdr *ip = (struct iphdr *)(frame + sizeof(struct ethhdr));
+  struct udphdr *udp =
+      (struct udphdr *)(frame + sizeof(struct ethhdr) + sizeof(struct iphdr));
+  uint8_t *payload = frame + sizeof(struct ethhdr) + sizeof(struct iphdr) +
+                     sizeof(struct udphdr);
 
-  ssize_t sent = sendto(sock, pkt, (size_t)pkt_len, 0, (struct sockaddr *)&dst,
-                        sizeof(dst));
+  int total_len = (int)(sizeof(struct ethhdr) + sizeof(struct iphdr) +
+                        sizeof(struct udphdr) + pkt_len);
+  if (total_len > (int)sizeof(frame))
+    return -1;
+
+  /* 1. Ethernet Header */
+  /* Target the client's MAC from the request */
+  memcpy(eth->h_dest, pkt->chaddr, 6);
+  memcpy(eth->h_source, ctx->server_mac, 6); /* Use bridge MAC */
+  eth->h_proto = htons(ETH_P_IP);
+
+  /* 2. IP Header */
+  memset(ip, 0, sizeof(*ip));
+  ip->ihl = 5;
+  ip->version = 4;
+  ip->tos = 0x10; /* Low delay */
+  ip->tot_len =
+      htons((uint16_t)(sizeof(struct iphdr) + sizeof(struct udphdr) + pkt_len));
+  ip->id = 0;
+  ip->frag_off = 0;
+  ip->ttl = 64;
+  ip->protocol = IPPROTO_UDP;
+  ip->saddr = ctx->gw_ip_be; /* Spoof 172.28.0.1 */
+  ip->daddr = htonl(INADDR_BROADCAST);
+  ip->check = checksum(ip, sizeof(*ip));
+
+  /* 3. UDP Header */
+  udp->source = htons(DHCP_SERVER_PORT);
+  udp->dest = htons(DHCP_CLIENT_PORT);
+  udp->len = htons((uint16_t)(sizeof(struct udphdr) + pkt_len));
+  udp->check = 0; /* UDP checksum is optional for IPv4, set to 0 */
+
+  /* 4. DHCP Payload */
+  memcpy(payload, pkt, (size_t)pkt_len);
+
+  struct sockaddr_ll dst;
+  memset(&dst, 0, sizeof(dst));
+  dst.sll_family = AF_PACKET;
+  dst.sll_ifindex = ifindex;
+  dst.sll_halen = 6;
+  memset(dst.sll_addr, 0xff, 6);
+
+  ssize_t sent = sendto(sock, frame, (size_t)total_len, 0,
+                        (struct sockaddr *)&dst, sizeof(dst));
   if (sent < 0) {
     ds_warn("[DHCP] sendto: %s", strerror(errno));
     return -1;
@@ -251,26 +322,105 @@ static void *dhcp_server_loop(void *arg) {
   if (!inet_ntop(AF_INET, &tmp_addr, offer_str, sizeof(offer_str)))
     offer_str[0] = '\0';
 
+  int packet_sock = -1;
+  struct dhcp_pkt reply;
+  uint8_t rx_buf[2048];
+
+  /* 0. Create the AF_PACKET socket for SNIFFING EVERYTHING.
+   * We use SOCK_RAW + ETH_P_ALL to ensure NO kernel filtering hidden from us.
+   */
+  packet_sock = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+  if (packet_sock < 0) {
+    ds_warn("[DHCP] packet socket: %s", strerror(errno));
+    goto out;
+  }
+
+  struct sockaddr_ll sll;
+  memset(&sll, 0, sizeof(sll));
+  sll.sll_family = AF_PACKET;
+  sll.sll_ifindex = (int)if_nametoindex(ctx->iface);
+  sll.sll_protocol = htons(ETH_P_ALL);
+
+  if (bind(packet_sock, (struct sockaddr *)&sll, sizeof(sll)) < 0) {
+    ds_warn("[DHCP] packet bind(%s): %s", ctx->iface, strerror(errno));
+    goto out;
+  }
+
   ds_log("DHCP Server started on %s  offer=%s", ctx->iface, offer_str);
 
-  struct dhcp_pkt req;
-  struct dhcp_pkt reply;
+  struct pollfd fds[2];
+  fds[0].fd = packet_sock;
+  fds[0].events = POLLIN;
+  fds[1].fd = ctx->stop_efd;
+  fds[1].events = POLLIN;
 
   while (!ctx->stop) {
-    /* ── Receive ──────────────────────────────────────────────────────── */
-    ssize_t len = recv(ctx->sock, &req, sizeof(req), 0);
-    if (len < 0) {
-      if (ctx->stop)
-        break;
+    /* ── Multiplex ────────────────────────────────────────────────────── */
+    int poll_ret = poll(fds, 2, -1);
+    if (poll_ret < 0) {
       if (errno == EINTR || errno == EAGAIN)
         continue;
-      ds_warn("[DHCP] recv: %s", strerror(errno));
+      ds_warn("[DHCP] poll: %s", strerror(errno));
       break;
     }
 
-    /* Minimum viable: fixed fields + magic */
-    if (len < (ssize_t)offsetof(struct dhcp_pkt, options))
+    if (fds[1].revents & POLLIN) {
+      /* Stop signaled via eventfd */
+      break;
+    }
+
+    if (!(fds[0].revents & POLLIN))
       continue;
+
+    /* ── Receive ──────────────────────────────────────────────────────── */
+    ssize_t len = recv(packet_sock, rx_buf, sizeof(rx_buf), 0);
+    if (len < 0) {
+      if (errno == EINTR || errno == EAGAIN)
+        continue;
+      if (errno == ENETDOWN || errno == ESHUTDOWN || errno == EBADF)
+        break;
+      ds_warn("[DHCP] packet recv: %s", strerror(errno));
+      break;
+    }
+
+    /* 1. Ethernet Header (14 bytes) */
+    if (len < (ssize_t)(sizeof(struct ethhdr) + sizeof(struct iphdr) +
+                        sizeof(struct udphdr)))
+      continue;
+
+    struct ethhdr eth;
+    memcpy(&eth, rx_buf, sizeof(eth));
+    if (ntohs(eth.h_proto) != ETH_P_IP)
+      continue;
+
+    /* 2. IP Header */
+    struct iphdr ip;
+    memcpy(&ip, rx_buf + sizeof(eth), sizeof(ip));
+    if (ip.protocol != IPPROTO_UDP || ip.ihl < 5)
+      continue;
+
+    /* 3. UDP Header */
+    int ip_hdr_len = ip.ihl * 4;
+    if (len < (ssize_t)(sizeof(eth) + ip_hdr_len + sizeof(struct udphdr)))
+      continue;
+
+    struct udphdr udp;
+    memcpy(&udp, rx_buf + sizeof(eth) + ip_hdr_len, sizeof(udp));
+
+    if (ntohs(udp.dest) != DHCP_SERVER_PORT)
+      continue;
+
+    /* 4. DHCP Payload */
+    int payload_off = (int)sizeof(eth) + ip_hdr_len + (int)sizeof(udp);
+    int req_len = (int)len - payload_off;
+    if (req_len < (int)offsetof(struct dhcp_pkt, options))
+      continue;
+
+    /* FIND-04: Fix unaligned pointer cast by copying to stack */
+    struct dhcp_pkt req;
+    if (req_len > (int)sizeof(req))
+      req_len = (int)sizeof(req);
+    memcpy(&req, rx_buf + payload_off, (size_t)req_len);
 
     if (ntohl(req.magic) != DHCP_MAGIC)
       continue;
@@ -278,12 +428,9 @@ static void *dhcp_server_loop(void *arg) {
     if (req.op != BOOTP_REQUEST)
       continue;
 
-    int opts_len = (int)(len - (ssize_t)offsetof(struct dhcp_pkt, options));
+    int opts_len = (int)(req_len - (int)offsetof(struct dhcp_pkt, options));
 
-    /* MAC filter — drop packets from any client that isn't our container.
-     * In bridge mode all monitors share ds-br0 and receive every container's
-     * broadcasts; without this check each monitor races to answer the wrong
-     * client, causing IP misassignment under multi-container setups. */
+    /* MAC filter */
     if (memcmp(req.chaddr, ctx->peer_mac, 6) != 0)
       continue;
 
@@ -300,24 +447,20 @@ static void *dhcp_server_loop(void *arg) {
              req.chaddr[3], req.chaddr[4], req.chaddr[5]);
       {
         int plen = build_reply(&reply, &req, DHCPOFFER, ctx);
-        if (send_reply(ctx->sock, &reply, plen) == 0)
+        if (send_reply(packet_sock, sll.sll_ifindex, &reply, plen, ctx) == 0)
           ds_log("[DHCP] OFFER    → %s  xid=%08x", offer_str, ntohl(req.xid));
       }
       break;
 
     case DHCPREQUEST: {
-      /*
-       * If the client included a server-identifier option, it must match
-       * our gateway IP — otherwise the REQUEST is directed at another server.
-       */
+      /* Skip SERVER_ID check for INIT-REBOOT (broadcast requests)
+       * Some clients (like Void's dhclient) might be rebinding/rebooting. */
       uint8_t sid[4];
       if (opt_get(req.options, opts_len, OPT_SERVER_ID, sid, 4) == 4) {
         uint32_t sid_be;
         memcpy(&sid_be, sid, 4);
-        if (sid_be != ctx->gw_ip_be) {
-          ds_log("[DHCP] REQUEST  for other server — ignoring");
+        if (sid_be != ctx->gw_ip_be)
           break;
-        }
       }
 
       ds_log("[DHCP] REQUEST   xid=%08x  chaddr=%02x:%02x:%02x:%02x:%02x:%02x",
@@ -325,18 +468,16 @@ static void *dhcp_server_loop(void *arg) {
              req.chaddr[3], req.chaddr[4], req.chaddr[5]);
 
       int plen = build_reply(&reply, &req, DHCPACK, ctx);
-      if (send_reply(ctx->sock, &reply, plen) == 0)
+      if (send_reply(packet_sock, sll.sll_ifindex, &reply, plen, ctx) == 0)
         ds_log("[DHCP] ACK      → %s  xid=%08x", offer_str, ntohl(req.xid));
       break;
     }
-
-    default:
-      /* DHCPRELEASE, DHCPINFORM, etc. — nothing to do */
-      break;
     }
   }
 
-  close(ctx->sock);
+out:
+  if (packet_sock >= 0)
+    close(packet_sock);
   ctx->sock = -1;
   ds_log("[DHCP] Server stopped on %s", ctx->iface);
   return NULL;
@@ -353,12 +494,42 @@ void ds_dhcp_server_start(struct ds_config *cfg, const char *veth_host,
 
   memset(&g_dhcp, 0, sizeof(g_dhcp));
   g_dhcp.sock = -1;
-  g_dhcp.offer_ip_be = offer_ip_be;
-  g_dhcp.gw_ip_be = gw_ip_be;
+  g_dhcp.stop_efd = eventfd(0, EFD_CLOEXEC);
+  if (g_dhcp.stop_efd < 0) {
+    ds_warn("[DHCP] eventfd failed: %s - aborting", strerror(errno));
+    pthread_mutex_unlock(&g_dhcp_lock);
+    return;
+  }
   g_dhcp.netmask_be = htonl(0xFFFF0000u); /* /16 */
   g_dhcp.stop = 0;
-  strncpy(g_dhcp.iface, veth_host, IFNAMSIZ - 1);
+  safe_strncpy(g_dhcp.iface, veth_host, sizeof(g_dhcp.iface));
+  g_dhcp.offer_ip_be = offer_ip_be;
+  g_dhcp.gw_ip_be = gw_ip_be;
   memcpy(g_dhcp.peer_mac, peer_mac, 6);
+
+  /* ── Fetch Bridge MAC ─────────────────────────────────────────────── */
+  /* We need the bridge MAC to spoof the source in DHCP replies.
+   * If we use 00:00:00... or a random MAC, the container's ARP will break. */
+  int s = socket(AF_INET, SOCK_DGRAM, 0);
+  if (s >= 0) {
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    safe_strncpy(ifr.ifr_name, DS_NAT_BRIDGE, IFNAMSIZ);
+    if (ioctl(s, SIOCGIFHWADDR, &ifr) == 0) {
+      memcpy(g_dhcp.server_mac, ifr.ifr_hwaddr.sa_data, 6);
+    } else {
+      /* Fallback to all-zeros if SIOCGIFHWADDR fails (unlikely) */
+      memset(g_dhcp.server_mac, 0, 6);
+      ds_warn("[DHCP] Failed to get MAC for %s: %s. Using all-zeros.",
+              DS_NAT_BRIDGE, strerror(errno));
+    }
+    close(s);
+  } else {
+    memset(g_dhcp.server_mac, 0, 6);
+    ds_warn(
+        "[DHCP] Failed to create socket for MAC lookup: %s. Using all-zeros.",
+        strerror(errno));
+  }
 
   /* Resolve DNS to advertise in the DHCP lease.
    *
@@ -395,48 +566,10 @@ void ds_dhcp_server_start(struct ds_config *cfg, const char *veth_host,
     }
   }
 
-  /* ── Create UDP socket ─────────────────────────────────────────────── */
-  int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-  if (sock < 0) {
-    ds_warn("[DHCP] socket: %s", strerror(errno));
-    goto unlock;
-  }
-
-  int one = 1;
-  setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
-  setsockopt(sock, SOL_SOCKET, SO_REUSEPORT, &one, sizeof(one));
-
-  if (setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one)) < 0) {
-    ds_warn("[DHCP] SO_BROADCAST: %s", strerror(errno));
-    close(sock);
-    goto unlock;
-  }
-
-  /*
-   * Bind to the specific veth_host interface only.
-   * This prevents any collision with DHCP servers on other host interfaces.
-   * Requires root (Droidspaces always runs as root).
-   */
-  if (setsockopt(sock, SOL_SOCKET, SO_BINDTODEVICE, veth_host,
-                 (socklen_t)(strlen(veth_host) + 1)) < 0) {
-    ds_warn("[DHCP] SO_BINDTODEVICE(%s): %s", veth_host, strerror(errno));
-    close(sock);
-    goto unlock;
-  }
-
-  struct sockaddr_in addr;
-  memset(&addr, 0, sizeof(addr));
-  addr.sin_family = AF_INET;
-  addr.sin_port = htons(DHCP_SERVER_PORT);
-  addr.sin_addr.s_addr = INADDR_ANY;
-
-  if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-    ds_warn("[DHCP] bind(port 67): %s", strerror(errno));
-    close(sock);
-    goto unlock;
-  }
-
-  g_dhcp.sock = sock;
+  /* ── No sockets created here ────────────────────────────────────────── */
+  /* We build and bind all sockets inside dhcp_server_loop. This is cleaner
+   * and avoids having two threads access ctx->sock during teardown/start. */
+  g_dhcp.sock = -1;
 
   /* ── Spawn joinable thread ─────────────────────────────────────────── */
   /* Joinable (default) so ds_dhcp_server_stop() can pthread_join() and
@@ -445,33 +578,37 @@ void ds_dhcp_server_start(struct ds_config *cfg, const char *veth_host,
    * when memset fires, corrupting its own context mid-loop. */
   if (pthread_create(&g_dhcp.tid, NULL, dhcp_server_loop, &g_dhcp) != 0) {
     ds_warn("[DHCP] pthread_create: %s", strerror(errno));
-    close(sock);
     g_dhcp.sock = -1;
   }
 
-unlock:
   pthread_mutex_unlock(&g_dhcp_lock);
 }
 
 void ds_dhcp_server_stop(void) {
   pthread_mutex_lock(&g_dhcp_lock);
-  g_dhcp.stop = 1;
-  pthread_t tid = g_dhcp.tid;
-  if (g_dhcp.sock >= 0) {
-    /*
-     * shutdown() unblocks the recv() call in dhcp_server_loop without
-     * closing the fd — the thread closes it after the loop exits.
-     * This mirrors the same pattern used by ds_net_stop_route_monitor().
-     */
-    shutdown(g_dhcp.sock, SHUT_RDWR);
+
+  if (g_dhcp.tid != 0) {
+    g_dhcp.stop = 1;
+    if (g_dhcp.stop_efd >= 0) {
+      uint64_t val = 1;
+      if (write(g_dhcp.stop_efd, &val, sizeof(val)) < 0) {
+        /* If write fails, we still proceed to join; poll would eventually
+         * timeout or error */
+      }
+    }
   }
+
+  pthread_t tid = g_dhcp.tid;
   pthread_mutex_unlock(&g_dhcp_lock);
 
-  /* Join outside the lock — guarantees the thread has fully exited and
-   * closed ctx->sock before ds_dhcp_server_start() calls memset(&g_dhcp).
-   * Without this, a reboot cycle races: start() overwrites g_dhcp.stop=0
-   * while the old thread is still spinning, causing two threads to serve
-   * DHCP simultaneously with a corrupted shared context. */
-  if (tid != 0)
+  if (tid != 0) {
     pthread_join(tid, NULL);
+    pthread_mutex_lock(&g_dhcp_lock);
+    g_dhcp.tid = 0;
+    if (g_dhcp.stop_efd >= 0) {
+      close(g_dhcp.stop_efd);
+      g_dhcp.stop_efd = -1;
+    }
+    pthread_mutex_unlock(&g_dhcp_lock);
+  }
 }

@@ -491,26 +491,25 @@ int setup_veth_host_side(struct ds_config *cfg, pid_t child_pid) {
       ds_log("[DEBUG] Creating bridge %s...", DS_NAT_BRIDGE);
       if (ds_nl_create_bridge(ctx, DS_NAT_BRIDGE) < 0)
         ds_warn("[DEBUG] Failed to create bridge %s", DS_NAT_BRIDGE);
-
-      if (ds_nl_add_addr4(ctx, DS_NAT_BRIDGE, inet_addr(DS_NAT_GW_IP),
-                          DS_NAT_PREFIX) < 0)
-        ds_warn("[DEBUG] Failed to add IP to %s", DS_NAT_BRIDGE);
-
-      if (ds_nl_link_up(ctx, DS_NAT_BRIDGE) < 0)
-        ds_warn("[DEBUG] Failed to bring up %s", DS_NAT_BRIDGE);
-
-      /* Disable ICMP redirects on the bridge. */
-      write_file("/proc/sys/net/ipv4/conf/" DS_NAT_BRIDGE "/accept_redirects",
-                 "0");
-      write_file("/proc/sys/net/ipv4/conf/" DS_NAT_BRIDGE "/send_redirects",
-                 "0");
-    } else {
-      ds_log("[DEBUG] Bridge %s already exists.", DS_NAT_BRIDGE);
-      write_file("/proc/sys/net/ipv4/conf/" DS_NAT_BRIDGE "/accept_redirects",
-                 "0");
-      write_file("/proc/sys/net/ipv4/conf/" DS_NAT_BRIDGE "/send_redirects",
-                 "0");
     }
+
+    /* Always assert bridge IP/UP/Hardening even if it already exists.
+     * This ensures everything is correct after host-side networking changes or
+     * crashes. */
+    int err = ds_nl_add_addr4(ctx, DS_NAT_BRIDGE, inet_addr(DS_NAT_GW_IP),
+                              DS_NAT_PREFIX);
+    if (err < 0 && err != -EEXIST && err != -ENETDOWN) {
+      ds_warn("[DEBUG] Failed to add IP to %s: %d", DS_NAT_BRIDGE, err);
+    }
+
+    if (ds_nl_link_up(ctx, DS_NAT_BRIDGE) < 0)
+      ds_warn("[DEBUG] Failed to bring up %s", DS_NAT_BRIDGE);
+
+    /* Disable ICMP redirects on the bridge. */
+    write_file("/proc/sys/net/ipv4/conf/" DS_NAT_BRIDGE "/accept_redirects",
+               "0");
+    write_file("/proc/sys/net/ipv4/conf/" DS_NAT_BRIDGE "/send_redirects", "0");
+    write_file("/proc/sys/net/ipv4/conf/" DS_NAT_BRIDGE "/rp_filter", "0");
   } else {
     ds_log("[NET] Bridgeless Fallback: skipping bridge creation.");
   }
@@ -519,7 +518,6 @@ int setup_veth_host_side(struct ds_config *cfg, pid_t child_pid) {
   if (cfg->net_mode == DS_NET_NAT) {
     ds_log("[DEBUG] Applying late-stage hardening for Android NAT...");
     if (!cfg->net_bridgeless) {
-      write_file("/proc/sys/net/ipv4/conf/" DS_NAT_BRIDGE "/rp_filter", "0");
       if (access("/proc/sys/net/bridge", F_OK) == 0) {
         write_file("/proc/sys/net/bridge/bridge-nf-call-iptables", "0");
         write_file("/proc/sys/net/bridge/bridge-nf-call-ip6tables", "0");
@@ -679,7 +677,10 @@ int setup_veth_host_side(struct ds_config *cfg, pid_t child_pid) {
               cfg->static_nat_ip);
     }
 
-    const char *dhcp_iface = cfg->net_bridgeless ? veth_host : DS_NAT_BRIDGE;
+    /* Always bind to veth_host for DHCP sniffing.
+     * Even if bridged, AF_PACKET on the slave sees traffic before the bridge.
+     */
+    const char *dhcp_iface = veth_host;
     ds_dhcp_server_start(cfg, dhcp_iface, offer_ip, inet_addr(DS_NAT_GW_IP),
                          peer_mac);
 
