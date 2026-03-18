@@ -150,21 +150,14 @@ static void cleanup_container_resources(struct ds_config *cfg, pid_t pid,
     cleanup_unified_tmpfs();
   }
 
-  /* 1. Cleanup firmware path (skip when force — accessing zombie rootfs hangs)
-   */
-  if (!force_cleanup) {
-    if (cfg->rootfs_path[0]) {
-      firmware_path_remove_rootfs(cfg->rootfs_path);
-    } else if (pid > 0) {
-      char rootfs[PATH_MAX];
-      char root_link[PATH_MAX];
-      snprintf(root_link, sizeof(root_link), "/proc/%d/root", pid);
-      ssize_t rlen = readlink(root_link, rootfs, sizeof(rootfs) - 1);
-      if (rlen > 0) {
-        rootfs[rlen] = '\0'; /* readlink does NOT null-terminate */
-        firmware_path_remove_rootfs(rootfs);
-      }
-    }
+  /* 1. Cleanup firmware path (hw_access mode only; skip on force-cleanup
+   * since accessing a zombie-held rootfs can hang).
+   * Use cfg->rootfs_path directly - it is already realpath'd and valid for
+   * both dir-based and img-based modes at this point. */
+  if (!force_cleanup && cfg->hw_access && cfg->rootfs_path[0]) {
+    char fw_path[PATH_MAX + 16];
+    snprintf(fw_path, sizeof(fw_path), "%s/lib/firmware", cfg->rootfs_path);
+    firmware_path_remove(fw_path);
   }
 
   /* 2. Resolve global PID file path */
@@ -473,6 +466,16 @@ int start_rootfs(struct ds_config *cfg) {
     if (cfg->is_img_mount)
       unmount_rootfs_img(cfg->img_mount_point, cfg->foreground);
     return -1;
+  }
+
+  /* Firmware path - hw_access mode only.
+   * By this point cfg->rootfs_path is fully resolved (realpath'd) and the
+   * image is mounted if applicable.  firmware_path_add() internally checks
+   * that /lib/firmware exists in the rootfs before touching the sysfs node. */
+  if (cfg->hw_access) {
+    char fw_path[PATH_MAX + 16];
+    snprintf(fw_path, sizeof(fw_path), "%s/lib/firmware", cfg->rootfs_path);
+    firmware_path_add(fw_path);
   }
 
   cfg->tty_count = DS_MAX_TTYS;
@@ -1219,10 +1222,13 @@ int stop_rootfs(struct ds_config *cfg, int skip_unmount) {
     }
   }
 
-  /* 4. Firmware cleanup.
+  /* 4. Firmware cleanup (hw_access mode only).
    * Skip when unkillable — accessing zombie-held rootfs can hang. */
-  if (cfg->img_mount_point[0] && !unkillable)
-    firmware_path_remove_rootfs(cfg->img_mount_point);
+  if (cfg->img_mount_point[0] && !unkillable && cfg->hw_access) {
+    char fw_path[PATH_MAX + 16];
+    snprintf(fw_path, sizeof(fw_path), "%s/lib/firmware", cfg->img_mount_point);
+    firmware_path_remove(fw_path);
+  }
 
   /* 5. Complete resource cleanup. */
   cleanup_container_resources(cfg, pid, skip_unmount, unkillable);
