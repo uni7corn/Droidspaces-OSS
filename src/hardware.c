@@ -969,7 +969,7 @@ int setup_hardware_access(struct ds_config *cfg, gid_t *gpu_gids,
     setup_gpu_groups(gpu_gids, gid_count);
 
   /* 2. Mount X11 socket for GUI applications */
-  if (cfg->hw_access || cfg->termux_x11)
+  if (cfg->termux_x11)
     setup_x11_and_virgl_sockets(cfg);
 
   return 0;

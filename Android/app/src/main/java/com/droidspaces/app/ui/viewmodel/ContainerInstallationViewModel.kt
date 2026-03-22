@@ -138,7 +138,7 @@ class ContainerInstallationViewModel : ViewModel() {
             disableIPv6 = disableIPv6,
             enableAndroidStorage = enableAndroidStorage,
             enableHwAccess = enableHwAccess,
-            enableTermuxX11 = if (enableHwAccess) true else enableTermuxX11,
+            enableTermuxX11 = enableTermuxX11,
             selinuxPermissive = selinuxPermissive,
             volatileMode = volatileMode,
             bindMounts = bindMounts,

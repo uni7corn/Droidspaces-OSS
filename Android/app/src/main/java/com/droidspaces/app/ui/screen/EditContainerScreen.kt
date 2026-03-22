@@ -165,7 +165,7 @@ fun EditContainerScreen(
                     disableIPv6 = disableIPv6,
                     enableAndroidStorage = enableAndroidStorage,
                     enableHwAccess = enableHwAccess,
-                    enableTermuxX11 = if (enableHwAccess) true else enableTermuxX11,
+                    enableTermuxX11 = enableTermuxX11,
                     selinuxPermissive = selinuxPermissive,
                     volatileMode = volatileMode,
                     bindMounts = bindMounts,
@@ -1022,12 +1022,9 @@ fun EditContainerScreen(
                 painter = androidx.compose.ui.res.painterResource(R.drawable.ic_x11),
                 title = context.getString(R.string.termux_x11),
                 description = context.getString(R.string.termux_x11_description),
-                checked = enableHwAccess || enableTermuxX11,
-                onCheckedChange = {
-                    clearFocus()
-                    enableTermuxX11 = it
-                },
-                enabled = !enableHwAccess
+                checked = enableTermuxX11,
+                onCheckedChange = { enableTermuxX11 = it },
+                enabled = true
             )
 
             Text(

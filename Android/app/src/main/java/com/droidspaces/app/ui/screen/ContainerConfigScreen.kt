@@ -180,7 +180,7 @@ fun ContainerConfigScreen(
             ) {
                 Button(
                     onClick = {
-                        onNext(netMode, disableIPv6, enableAndroidStorage, enableHwAccess, if (enableHwAccess) true else enableTermuxX11, selinuxPermissive, volatileMode, bindMounts, dnsServers, runAtBoot, forceCgroupv1, blockNestedNs, if (envFileContent.isBlank()) null else envFileContent, upstreamInterfaces, portForwards)
+                        onNext(netMode, disableIPv6, enableAndroidStorage, enableHwAccess, enableTermuxX11, selinuxPermissive, volatileMode, bindMounts, dnsServers, runAtBoot, forceCgroupv1, blockNestedNs, if (envFileContent.isBlank()) null else envFileContent, upstreamInterfaces, portForwards)
                     },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -683,9 +683,9 @@ fun ContainerConfigScreen(
                 painter = androidx.compose.ui.res.painterResource(R.drawable.ic_x11),
                 title = context.getString(R.string.termux_x11),
                 description = context.getString(R.string.termux_x11_description),
-                checked = enableHwAccess || enableTermuxX11,
+                checked = enableTermuxX11,
                 onCheckedChange = { enableTermuxX11 = it },
-                enabled = !enableHwAccess
+                enabled = true
             )
 
             Text(
