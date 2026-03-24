@@ -22,9 +22,17 @@ const char *get_pids_dir(void) {
   return pids_path;
 }
 
+const char *get_net_dir(void) {
+  static char net_path[PATH_MAX];
+  snprintf(net_path, sizeof(net_path), "%s/%s", get_workspace_dir(),
+           DS_NET_SUBDIR);
+  return net_path;
+}
+
 int ensure_workspace(void) {
   mkdir(get_workspace_dir(), 0755);
   mkdir(get_pids_dir(), 0755);
+  mkdir(get_net_dir(), 0755);
 
   /* Also ensure /data/local/Droidspaces/mounts on Android */
   if (is_android()) {

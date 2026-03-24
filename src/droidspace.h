@@ -85,6 +85,7 @@
 #define DS_BIND_INITIAL_CAP 4
 #define DS_VOLATILE_SUBDIR "Volatile"
 #define DS_LOGS_SUBDIR "Logs"
+#define DS_NET_SUBDIR "Net"
 #define DS_ANDROID_TMPFS_CONTEXT "u:object_r:tmpfs:s0"
 #define DS_ANDROID_VOLD_CONTEXT "u:object_r:vold_data_file:s0"
 #define DS_MAX_GPU_GROUPS 32
@@ -616,6 +617,7 @@ int console_monitor_loop(int console_master_fd, pid_t monitor_pid,
 
 const char *get_workspace_dir(void);
 const char *get_pids_dir(void);
+const char *get_net_dir(void);
 int ensure_workspace(void);
 int generate_container_name(const char *rootfs_path, char *name, size_t size);
 int find_available_name(const char *base_name, char *final_name, size_t size);

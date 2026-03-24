@@ -1080,6 +1080,90 @@ static int addrtype_available(void) {
 }
 
 /* ---------------------------------------------------------------------------
+ * Port-forward state file helpers
+ *
+ * We persist a record of every rule actually inserted into iptables so that
+ * ds_ipt_remove_portforwards can delete exactly those rules even when the
+ * user edits (or empties) the port-forward list in the container config
+ * while the container is running (config-drift).
+ *
+ * State file path : <workspace>/pf_<container_ip>.state
+ * Format          : one line per inserted rule, 5 space-separated fields:
+ *   <addrtype|basic> <proto> <host_port_str> <to_dest> <cont_port_str>
+ *
+ * The file is created/truncated at ds_ipt_add_portforwards() time and
+ * unlinked after ds_ipt_remove_portforwards() consumes it.
+ * ---------------------------------------------------------------------------*/
+
+static void pf_state_path(const char *container_ip, char *buf, size_t len) {
+  snprintf(buf, len, "%s/pf_%s.state", get_net_dir(), container_ip);
+}
+
+/* Append one successfully-inserted rule to the state file. */
+static void pf_state_append(FILE *f, const char *variant, const char *proto,
+                            const char *host_port_str, const char *to_dest,
+                            const char *cont_port_str) {
+  if (!f)
+    return;
+  fprintf(f, "%s %s %s %s %s\n", variant, proto, host_port_str, to_dest,
+          cont_port_str);
+  fflush(f);
+}
+
+/* Read the state file and issue iptables -D for every recorded rule.
+ * Returns 1 if the state file existed (regardless of delete outcomes),
+ * 0 if the file was absent (caller should fall back to other strategies). */
+static int pf_state_remove(const char *container_ip) {
+  char path[PATH_MAX];
+  pf_state_path(container_ip, path, sizeof(path));
+
+  FILE *f = fopen(path, "r");
+  if (!f)
+    return 0;
+
+  char line[256];
+  while (fgets(line, sizeof(line), f)) {
+    size_t ll = strlen(line);
+    if (ll > 0 && line[ll - 1] == '\n')
+      line[ll - 1] = '\0';
+
+    char variant[16], proto[4], host_port_str[16], to_dest[80],
+        cont_port_str[16];
+    if (sscanf(line, "%15s %3s %15s %79s %15s", variant, proto, host_port_str,
+               to_dest, cont_port_str) != 5)
+      continue;
+
+    /* Delete PREROUTING DNAT - mirror the variant that was inserted */
+    if (strcmp(variant, "addrtype") == 0) {
+      char *del[] = {"iptables",    "-t",         "nat",   "-D",
+                     "PREROUTING",  "-p",         proto,   "-m",
+                     "addrtype",    "--dst-type", "LOCAL", "--dport",
+                     host_port_str, "-j",         "DNAT",  "--to-destination",
+                     to_dest,       NULL};
+      run_command_quiet(del);
+    } else {
+      char *del[] = {"iptables",    "-t", "nat",  "-D",
+                     "PREROUTING",  "-p", proto,  "--dport",
+                     host_port_str, "-j", "DNAT", "--to-destination",
+                     to_dest,       NULL};
+      run_command_quiet(del);
+    }
+
+    /* Delete FORWARD ACCEPT */
+    char cont_ip_buf[INET_ADDRSTRLEN];
+    safe_strncpy(cont_ip_buf, container_ip, sizeof(cont_ip_buf));
+    char *del_fwd[] = {"iptables",    "-D", "FORWARD",   "-p",
+                       proto,         "-d", cont_ip_buf, "--dport",
+                       cont_port_str, "-j", "ACCEPT",    NULL};
+    run_command_quiet(del_fwd);
+  }
+
+  fclose(f);
+  unlink(path);
+  return 1;
+}
+
+/* ---------------------------------------------------------------------------
  * Public API: ds_ipt_add_portforwards
  *
  * For each entry in cfg->port_forwards, inserts:
@@ -1097,6 +1181,18 @@ int ds_ipt_add_portforwards(struct ds_config *cfg, const char *container_ip) {
       container_ip[0] == '\0')
     return 0;
 
+  /* Open the state file for this container (truncate any stale copy).
+   * Every rule we successfully insert is recorded so that
+   * ds_ipt_remove_portforwards can delete exactly those rules even if the
+   * port-forward list is edited in the config while the container runs. */
+  char state_path[PATH_MAX];
+  pf_state_path(container_ip, state_path, sizeof(state_path));
+  FILE *state_f = fopen(state_path, "w");
+  if (!state_f)
+    ds_warn("[IPT] Could not open port-forward state file %s: %s - "
+            "cleanup on stop may be incomplete",
+            state_path, strerror(errno));
+
   /* Probe once before the loop — avoids reopening /proc/net/ip_tables_matches
    * for every port forward entry. */
   int use_addrtype = addrtype_available();
@@ -1109,8 +1205,8 @@ int ds_ipt_add_portforwards(struct ds_config *cfg, const char *container_ip) {
       /* Range syntax: START:END for --dport, START-END for --to-destination */
       snprintf(host_port_str, sizeof(host_port_str), "%u:%u", pf->host_port,
                pf->host_port_end);
-      snprintf(cont_port_str, sizeof(cont_port_str), "%u:%u", pf->container_port,
-               pf->container_port_end);
+      snprintf(cont_port_str, sizeof(cont_port_str), "%u:%u",
+               pf->container_port, pf->container_port_end);
       snprintf(to_dest, sizeof(to_dest), "%s:%u-%u", container_ip,
                pf->container_port, pf->container_port_end);
     } else {
@@ -1126,8 +1222,12 @@ int ds_ipt_add_portforwards(struct ds_config *cfg, const char *container_ip) {
      * Preferred: -m addrtype --dst-type LOCAL restricts the rule to traffic
      * destined for the phone itself — prevents hijacking hotspot client flows.
      * Fallback: omit addrtype on kernels where xt_addrtype is absent (common
-     * on Android 4.14 and below). The rule is broader but still functional. */
+     * on Android 4.14 and below). The rule is broader but still functional.
+     *
+     * We record which variant was actually inserted in the state file so
+     * ds_ipt_remove_portforwards can issue the exact matching -D later. */
     int dnat_ok = 0;
+    const char *inserted_variant = NULL;
 
     if (use_addrtype) {
       char *dnat[] = {"iptables",
@@ -1150,7 +1250,9 @@ int ds_ipt_add_portforwards(struct ds_config *cfg, const char *container_ip) {
                       to_dest,
                       NULL};
       dnat_ok = (run_command_log(dnat) == 0);
-      if (!dnat_ok)
+      if (dnat_ok)
+        inserted_variant = "addrtype";
+      else
         ds_warn("portforward: DNAT+addrtype failed for port %s, "
                 "retrying without addrtype",
                 host_port_str);
@@ -1166,7 +1268,9 @@ int ds_ipt_add_portforwards(struct ds_config *cfg, const char *container_ip) {
                          "PREROUTING",       "1",           "-p",  pf->proto,
                          "--dport",          host_port_str, "-j",  "DNAT",
                          "--to-destination", to_dest,       NULL};
-      if (run_command_log(dnat_fb) != 0)
+      if (run_command_log(dnat_fb) == 0)
+        inserted_variant = "basic";
+      else
         ds_warn("portforward: DNAT insert failed for port %s", host_port_str);
     }
 
@@ -1178,7 +1282,18 @@ int ds_ipt_add_portforwards(struct ds_config *cfg, const char *container_ip) {
         NULL};
     if (run_command_quiet(fwd) != 0)
       ds_warn("portforward: FORWARD insert failed for port %s", cont_port_str);
+
+    /* Record this rule in the state file only if the DNAT insert succeeded.
+     * The FORWARD rule is always attempted; if it failed ds_warn was already
+     * emitted, but we still record the entry so removal can clean up the
+     * DNAT side on stop. */
+    if (inserted_variant)
+      pf_state_append(state_f, inserted_variant, pf->proto, host_port_str,
+                      to_dest, cont_port_str);
   }
+
+  if (state_f)
+    fclose(state_f);
 
   return 0;
 }
@@ -1186,16 +1301,47 @@ int ds_ipt_add_portforwards(struct ds_config *cfg, const char *container_ip) {
 /* ---------------------------------------------------------------------------
  * Public API: ds_ipt_remove_portforwards
  *
- * Mirrors ds_ipt_add_portforwards — deletes the DNAT + FORWARD rules.
- * Called from ds_net_cleanup() before ds_ipt_remove_ds_rules().
+ * Three-pass cleanup strategy, in order of reliability:
+ *
+ *   Pass 1 - state file (primary, always preferred)
+ *     Reads the state file written by ds_ipt_add_portforwards and issues
+ *     iptables -D using the exact args that were used to insert each rule.
+ *     This is immune to config-drift: it works correctly even if the user
+ *     added or removed port-forward entries in the config while the container
+ *     was running.
+ *
+ *   Pass 2 - cfg->port_forwards loop (safety net)
+ *     Iterates the current config and attempts deletion of both the addrtype
+ *     and basic DNAT variants. This catches rules added before the state file
+ *     feature existed (upgrades from older versions). run_command_quiet
+ *     silently ignores rules that no longer exist.
+ *
+ *   Pass 3 - iptables-save shell sweep (last resort)
+ *     Only runs when no state file was found. Scans live iptables rules for
+ *     anything targeting this container IP and removes them. Catches orphaned
+ *     rules from container crashes or pre-state-file installations.
  * ---------------------------------------------------------------------------*/
 
 int ds_ipt_remove_portforwards(struct ds_config *cfg) {
-  if (!cfg || cfg->port_forward_count <= 0 || cfg->nat_container_ip[0] == '\0')
+  if (!cfg)
     return 0;
 
-  const char *container_ip = cfg->nat_container_ip;
+  /* Resolve the container IP: prefer the runtime-assigned address; fall back
+   * to the configured static IP so cleanup works even if the container never
+   * fully started (e.g., crashed during boot before nat_container_ip was set).
+   */
+  const char *container_ip =
+      cfg->nat_container_ip[0] ? cfg->nat_container_ip : cfg->static_nat_ip;
+  if (!container_ip || container_ip[0] == '\0')
+    return 0;
 
+  /* ── Pass 1: state file ────────────────────────────────────────────────── */
+  int had_state = pf_state_remove(container_ip);
+
+  /* ── Pass 2: cfg->port_forwards safety net ─────────────────────────────── */
+  /* Attempt both addrtype and basic DNAT variants for every rule currently in
+   * the config. Whichever variant wasn't actually inserted will return a
+   * non-zero exit code from iptables; run_command_quiet ignores it. */
   for (int i = 0; i < cfg->port_forward_count; i++) {
     struct ds_port_forward *pf = &cfg->port_forwards[i];
 
@@ -1203,8 +1349,8 @@ int ds_ipt_remove_portforwards(struct ds_config *cfg) {
     if (pf->host_port_end) {
       snprintf(host_port_str, sizeof(host_port_str), "%u:%u", pf->host_port,
                pf->host_port_end);
-      snprintf(cont_port_str, sizeof(cont_port_str), "%u:%u", pf->container_port,
-               pf->container_port_end);
+      snprintf(cont_port_str, sizeof(cont_port_str), "%u:%u",
+               pf->container_port, pf->container_port_end);
       snprintf(to_dest, sizeof(to_dest), "%s:%u-%u", container_ip,
                pf->container_port, pf->container_port_end);
     } else {
@@ -1214,16 +1360,23 @@ int ds_ipt_remove_portforwards(struct ds_config *cfg) {
                pf->container_port);
     }
 
-    /* Delete PREROUTING DNAT — args must mirror the insert exactly */
-    char *del_dnat[] = {
+    /* addrtype variant */
+    char *del_at[] = {
         "iptables",    "-t",         "nat",     "-D",
         "PREROUTING",  "-p",         pf->proto, "-m",
         "addrtype",    "--dst-type", "LOCAL",   "--dport",
         host_port_str, "-j",         "DNAT",    "--to-destination",
         to_dest,       NULL};
-    run_command_quiet(del_dnat);
+    run_command_quiet(del_at);
 
-    /* Delete FORWARD ACCEPT */
+    /* basic variant (no addrtype) */
+    char *del_basic[] = {"iptables",    "-t", "nat",     "-D",
+                         "PREROUTING",  "-p", pf->proto, "--dport",
+                         host_port_str, "-j", "DNAT",    "--to-destination",
+                         to_dest,       NULL};
+    run_command_quiet(del_basic);
+
+    /* FORWARD ACCEPT */
     char *del_fwd[] = {"iptables",
                        "-D",
                        "FORWARD",
@@ -1237,6 +1390,37 @@ int ds_ipt_remove_portforwards(struct ds_config *cfg) {
                        "ACCEPT",
                        NULL};
     run_command_quiet(del_fwd);
+  }
+
+  /* ── Pass 3: iptables-save shell sweep (fallback) ─────────────────────────
+   */
+  /* Only runs when no state file existed - i.e., the container was started by
+   * an older version of Droidspaces that did not write state files, or the
+   * process crashed before the file could be written.
+   * We intentionally avoid this path in the normal case: parsing iptables-save
+   * output through a shell is slower and depends on the host having sh(1). */
+  if (!had_state) {
+    char cmd[512];
+
+    /* Remove PREROUTING DNAT rules whose --to-destination targets this IP */
+    snprintf(cmd, sizeof(cmd),
+             "iptables-save -t nat | grep ' -A PREROUTING ' | "
+             "grep -- '--to-destination %s:' | "
+             "sed 's/ -A / -D /' | "
+             "while IFS= read -r rule; do iptables -t nat $rule; done",
+             container_ip);
+    char *sh_nat[] = {"sh", "-c", cmd, NULL};
+    run_command_quiet(sh_nat);
+
+    /* Remove FORWARD ACCEPT rules whose -d targets this IP */
+    snprintf(cmd, sizeof(cmd),
+             "iptables-save -t filter | grep ' -A FORWARD ' | "
+             "grep -- ' -d %s ' | grep ' -j ACCEPT' | "
+             "sed 's/ -A / -D /' | "
+             "while IFS= read -r rule; do iptables -t filter $rule; done",
+             container_ip);
+    char *sh_fwd[] = {"sh", "-c", cmd, NULL};
+    run_command_quiet(sh_fwd);
   }
 
   return 0;
