@@ -26,6 +26,7 @@ import com.topjohnwu.superuser.Shell
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.droidspaces.app.R
+import com.droidspaces.app.util.Constants
 
 @Composable
 fun InstallationScreen(
@@ -39,6 +40,7 @@ fun InstallationScreen(
     var isSuccess by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isInstallingModule by remember { mutableStateOf(false) }
+    var rebootRecommended by remember { mutableStateOf(false) }
 
     // Check backend status and determine what to install
     LaunchedEffect(Unit) {
@@ -57,6 +59,15 @@ fun InstallationScreen(
             val isAtomicUpdate = backendStatus is DroidspacesBackendStatus.UpdateAvailable
 
             isInstallingModule = false
+
+            // Check if SELinux policy exists anywhere BEFORE we start nuking things
+            // We check both the module path and the backend backup path
+            val sepolicyExists = withContext(Dispatchers.IO) {
+                Shell.cmd("test -f ${Constants.DROIDSPACES_TE_PATH}").exec().isSuccess
+            }
+            if (!sepolicyExists) {
+                rebootRecommended = true
+            }
 
             if (!isAtomicUpdate) {
                 // Clean Slate: Remove the old module, but NEVER the bin directory
@@ -218,6 +229,33 @@ fun InstallationScreen(
                                 }
                             }
                         }
+                    }
+                }
+
+                if (rebootRecommended) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 12.dp),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = context.getString(R.string.reboot_recommended),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium,
+                            textAlign = TextAlign.Center
+                        )
                     }
                 }
             }

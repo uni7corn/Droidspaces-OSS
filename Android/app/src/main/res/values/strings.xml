@@ -439,5 +439,6 @@
     <string name="help_card_title">New to Droidspaces?</string>
     <string name="help_card_message">Tap here to learn how to setup your first Android container !</string>
     <string name="help_card_url">https://github.com/ravindu644/Droidspaces-OSS/blob/main/Documentation/Installation-Android.md</string>
+    <string name="reboot_recommended">Reboot recommended after installation to apply SELinux rules.</string>
 </resources>
 
