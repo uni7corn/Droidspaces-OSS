@@ -783,20 +783,6 @@ int setup_gpu_groups(gid_t *gpu_gids, int gid_count) {
 }
 
 /*
- * setup_x11_socket()
- *
- * Bind mount X11 socket directory for GUI application support.
- * Supports both desktop Linux and Termux X11 (Android).
- *
- * Only the .X11-unix subdirectory is mounted - never the entire /tmp.
- * Binding /tmp causes "required key not available" errors on encrypted
- * Android devices due to FBE keyring conflicts.
- *
- * Non-fatal: silently returns 0 if no X11 socket is found.
- *
- */
-
-/*
  * stop_termux_if_running()
  *
  * Checks if Termux is running and aggressively stops it to prevent
@@ -909,10 +895,10 @@ void cleanup_unified_tmpfs(void) {
  *
  */
 int setup_x11_and_virgl_sockets(struct ds_config *cfg) {
-  (void)cfg;
 
   if (!is_android()) {
-    /* Desktop Linux path */
+    /* Desktop Linux path - X11 socket always mounted in both hw/non-hw modes
+     */
     const char *x11_source = DS_X11_PATH_DESKTOP;
     if (access(x11_source, F_OK) == 0) {
       mkdir_p("/tmp", 01777);
@@ -930,6 +916,9 @@ int setup_x11_and_virgl_sockets(struct ds_config *cfg) {
   }
 
   /* Android path: bridge Termux /tmp into container's /tmp */
+  if (!cfg->termux_x11)
+    return 0;
+
   const char *bridge_source =
       DS_TERMUX_TMP_OLDROOT; /* FIX: Use explicit macro */
   const char *container_tmp = "/tmp";
@@ -969,16 +958,13 @@ int setup_x11_and_virgl_sockets(struct ds_config *cfg) {
  */
 int setup_hardware_access(struct ds_config *cfg, gid_t *gpu_gids,
                           int gid_count) {
-  if (!cfg->hw_access && !cfg->termux_x11)
-    return 0;
-
   /* 1. Create GPU groups inside the container */
   if (cfg->hw_access)
     setup_gpu_groups(gpu_gids, gid_count);
 
-  /* 2. Mount X11 socket for GUI applications */
-  if (cfg->termux_x11)
-    setup_x11_and_virgl_sockets(cfg);
+  /* 2. Mount X11 socket for GUI applications (always attempt on Linux, check
+   * flag on Android) */
+  setup_x11_and_virgl_sockets(cfg);
 
   return 0;
 }
