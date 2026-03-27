@@ -190,6 +190,8 @@ object BinaryInstaller {
                 .getOrElse { error -> return@withContext Result.failure(error) }
             installScript("service.sh")
                 .getOrElse { error -> return@withContext Result.failure(error) }
+            installScript("sepolicy.rule")
+                .getOrElse { error -> return@withContext Result.failure(error) }
 
             // Step 5: Verify both installations
             onProgress(InstallationStep.Verifying("droidspaces and busybox"))
@@ -240,11 +242,13 @@ object BinaryInstaller {
         val busyboxResult = Shell.cmd("test -x $INSTALL_PATH/$BUSYBOX_BINARY_NAME && echo 'installed' || echo 'not_installed'").exec()
         val postFsDataResult = Shell.cmd("test -f $INSTALL_PATH/post-fs-data.sh && echo 'installed' || echo 'not_installed'").exec()
         val serviceResult = Shell.cmd("test -f $INSTALL_PATH/service.sh && echo 'installed' || echo 'not_installed'").exec()
+        val sepolicyResult = Shell.cmd("test -f $INSTALL_PATH/sepolicy.rule && echo 'installed' || echo 'not_installed'").exec()
 
         droidspacesResult.isSuccess && droidspacesResult.out.any { it.contains("installed") } &&
         busyboxResult.isSuccess && busyboxResult.out.any { it.contains("installed") } &&
         postFsDataResult.isSuccess && postFsDataResult.out.any { it.contains("installed") } &&
-        serviceResult.isSuccess && serviceResult.out.any { it.contains("installed") }
+        serviceResult.isSuccess && serviceResult.out.any { it.contains("installed") } &&
+        sepolicyResult.isSuccess && sepolicyResult.out.any { it.contains("installed") }
     }
 }
 

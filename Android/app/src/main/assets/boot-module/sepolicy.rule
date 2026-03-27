@@ -1,0 +1,10 @@
+# silences droidspaces and container process ioctl denials
+allow su su { unix_dgram_socket unix_stream_socket udp_socket } *
+allowxperm su su { unix_dgram_socket unix_stream_socket udp_socket } ioctl *
+
+# allows su domain to interact with the container rootfs (which Android sees as unlabeled)
+allow su unlabeled { dir file lnk_file sock_file fifo_file } *
+allowxperm su unlabeled { dir file lnk_file sock_file fifo_file } ioctl *
+
+# allows kernel (kdevtmpfs) to create loop device nodes
+allow kernel device blk_file { create setattr getattr unlink }
