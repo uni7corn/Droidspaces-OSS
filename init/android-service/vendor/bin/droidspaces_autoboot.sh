@@ -73,8 +73,9 @@ for cfg in $(find "${CONTAINERS_DIR}" -name "container.config" 2>/dev/null); do
     log "Starting container: ${display}"
     "${DROIDSPACE_BINARY}" --config "${cfg}" start 2>&1 | strip_colors
 
-    if [ $? -eq 0 ]; then
-        log "SUCCESS: ${display}"
+    PID=$("${DROIDSPACE_BINARY}" --config "${cfg}" pid 2>/dev/null)
+    if [ "${PID}" != "NONE" ] && [ -n "${PID}" ]; then
+        log "SUCCESS: ${display} (PID: ${PID})"
         success=$((success + 1))
     else
         log "FAILED: ${display}"

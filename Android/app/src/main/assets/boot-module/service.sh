@@ -146,8 +146,9 @@ for cfg in $(${BUSYBOX_BINARY} find "${CONTAINERS_DIR}" -name "container.config"
     "${DROIDSPACE_BINARY}" --config "${cfg}" start 2>&1 | \
         ${BUSYBOX_BINARY} sed "s/$(printf '\033')\[[0-9;]*[mK]//g"
 
-    if [ $? -eq 0 ]; then
-        log "SUCCESS: ${display}"
+    PID=$("${DROIDSPACE_BINARY}" --config "${cfg}" pid 2>/dev/null)
+    if [ "${PID}" != "NONE" ] && [ -n "${PID}" ]; then
+        log "SUCCESS: ${display} (PID: ${PID})"
         success=$((success + 1))
     else
         log "FAILED: ${display}"
