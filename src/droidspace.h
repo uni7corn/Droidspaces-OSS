@@ -1,5 +1,5 @@
 /*
- * Droidspaces v5 — High-performance Container Runtime
+ * Droidspaces v5 - High-performance Container Runtime
  *
  * Copyright (C) 2026 ravindu644 <droidcasts@protonmail.com>
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -60,7 +60,7 @@
  * ---------------------------------------------------------------------------*/
 
 #define DS_PROJECT_NAME "Droidspaces"
-#define DS_VERSION "5.8.1"
+#define DS_VERSION "5.9.0"
 #define DS_MIN_KERNEL_MAJOR 3
 #define DS_MIN_KERNEL_MINOR 18
 #define DS_RECOMMENDED_KERNEL_MAJOR 4
@@ -147,6 +147,7 @@ extern char ds_log_container_name[256];
 void ds_log_internal(const char *prefix, const char *color, int is_err,
                      const char *fmt, ...);
 void ds_die_internal(const char *fmt, ...);
+void rotate_log(const char *path, size_t max_size);
 int check_ns(int flag, const char *name);
 
 #define ds_log(fmt, ...) ds_log_internal("+", C_GREEN, 0, fmt, ##__VA_ARGS__)
@@ -166,7 +167,7 @@ enum ds_net_mode {
   DS_NET_NONE,     /* isolated netns with loopback only          */
 };
 
-/* Opaque RTNETLINK context — defined in ds_netlink.c */
+/* Opaque RTNETLINK context - defined in ds_netlink.c */
 typedef struct ds_nl_ctx ds_nl_ctx_t;
 
 /* Handshake payload: Monitor → init via net_done_pipe */
@@ -228,7 +229,7 @@ struct ds_config_line {
   struct ds_config_line *next;
 };
 
-/* Terminal/TTY info — one per allocated PTY */
+/* Terminal/TTY info - one per allocated PTY */
 
 struct ds_tty_info {
   int master;          /* master fd (stays in parent/monitor) */
@@ -236,7 +237,7 @@ struct ds_tty_info {
   char name[PATH_MAX]; /* slave device path (e.g. /dev/pts/3) */
 };
 
-/* Container configuration — replaces all global variables */
+/* Container configuration - replaces all global variables */
 /* ---------------------------------------------------------------------------
  * Port forwarding (--port HOST:CONTAINER[/proto])
  * ---------------------------------------------------------------------------*/
@@ -340,6 +341,8 @@ struct ds_config {
  * ---------------------------------------------------------------------------*/
 
 void safe_strncpy(char *dst, const char *src, size_t size);
+char *ds_resolve_path_arg(const char *path);
+void ds_resolve_argv_paths(int argc, char **argv);
 int is_subpath(const char *parent, const char *child);
 int is_running_in_termux(void);
 int write_file(const char *path, const char *content);
@@ -513,7 +516,7 @@ int ds_nl_del_rule4(ds_nl_ctx_t *ctx, uint32_t src_be, uint8_t src_len,
 void ds_nl_flush_stale_veths(ds_nl_ctx_t *ctx, const char *prefix);
 int ds_nl_count_ifaces_with_prefix(ds_nl_ctx_t *ctx, const char *prefix);
 int ds_nl_list_ifaces(ds_nl_ctx_t *ctx, char names[][IFNAMSIZ], int max);
-/* Kernel capability probe — call before any NAT setup */
+/* Kernel capability probe - call before any NAT setup */
 int ds_nl_probe_nat_capability(char *reason, size_t rsz);
 
 /* ---------------------------------------------------------------------------
@@ -618,6 +621,7 @@ int console_monitor_loop(int console_master_fd, pid_t monitor_pid,
 const char *get_workspace_dir(void);
 const char *get_pids_dir(void);
 const char *get_net_dir(void);
+const char *get_logs_dir(void);
 int ensure_workspace(void);
 int generate_container_name(const char *rootfs_path, char *name, size_t size);
 int find_available_name(const char *base_name, char *final_name, size_t size);
@@ -677,5 +681,13 @@ void print_documentation(const char *argv0);
 int is_dangerous_node(const char *name);
 int check_requirements(void);
 int check_requirements_detailed(void);
+
+/* ---------------------------------------------------------------------------
+ * daemon.c - daemon, client, and probe entry points
+ * ---------------------------------------------------------------------------*/
+
+int ds_daemon_run(int foreground);
+int ds_client_run(int argc, char **argv);
+int ds_daemon_probe(void);
 
 #endif /* DROIDSPACE_H */

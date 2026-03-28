@@ -1,5 +1,5 @@
 /*
- * Droidspaces v5 — High-performance Container Runtime
+ * Droidspaces v5 - High-performance Container Runtime
  *
  * Copyright (C) 2026 ravindu644 <droidcasts@protonmail.com>
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -9,7 +9,8 @@
 
 /* Forward declarations */
 static void add_unknown_line(struct ds_config *cfg, const char *line);
-/* ds_net_validate_static_ip is defined in network.c - declared in droidspace.h */
+/* ds_net_validate_static_ip is defined in network.c - declared in droidspace.h
+ */
 #include <libgen.h>
 
 /* ---------------------------------------------------------------------------
@@ -232,10 +233,12 @@ int ds_config_load(const char *config_path, struct ds_config *cfg) {
       /* Validate on load - reject obviously malformed values stored by older
        * builds or hand-edited configs so we never boot with a garbage IP. */
       char _errbuf[128];
-      if (val[0] && ds_net_validate_static_ip(val, _errbuf, sizeof(_errbuf)) == 0)
+      if (val[0] &&
+          ds_net_validate_static_ip(val, _errbuf, sizeof(_errbuf)) == 0)
         safe_strncpy(cfg->static_nat_ip, val, sizeof(cfg->static_nat_ip));
       else if (val[0])
-        ds_warn("config: ignoring invalid static_nat_ip '%s': %s", val, _errbuf);
+        ds_warn("config: ignoring invalid static_nat_ip '%s': %s", val,
+                _errbuf);
     } else if (strcmp(key, "net_mode") == 0) {
       if (strcmp(val, "nat") == 0) {
         cfg->net_mode = DS_NET_NAT;
@@ -277,7 +280,7 @@ int ds_config_load(const char *config_path, struct ds_config *cfg) {
         up_tok = strtok_r(NULL, ",", &up_saveptr);
       }
       if (up_tok)
-        ds_warn("config: too many upstream_interfaces (max %d) — extra entries "
+        ds_warn("config: too many upstream_interfaces (max %d) - extra entries "
                 "ignored",
                 DS_MAX_UPSTREAM_IFACES);
     } else if (strcmp(key, "port_forwards") == 0) {
@@ -407,12 +410,12 @@ int ds_config_load(const char *config_path, struct ds_config *cfg) {
             }
 
             /* Host-side overlap */
-            uint16_t hs1 = pf->host_port,
-                     he1 = pf->host_port_end ? pf->host_port_end
-                                             : pf->host_port;
-            uint16_t hs2 = ex->host_port,
-                     he2 = ex->host_port_end ? ex->host_port_end
-                                             : ex->host_port;
+            uint16_t hs1 = pf->host_port, he1 = pf->host_port_end
+                                                    ? pf->host_port_end
+                                                    : pf->host_port;
+            uint16_t hs2 = ex->host_port, he2 = ex->host_port_end
+                                                    ? ex->host_port_end
+                                                    : ex->host_port;
             int host_overlap = (hs1 <= he2 && hs2 <= he1);
 
             /* Container-side overlap */
@@ -440,10 +443,10 @@ int ds_config_load(const char *config_path, struct ds_config *cfg) {
       }
       if (pf_tok)
         ds_warn(
-            "config: too many port_forwards (max %d) — extra entries ignored",
+            "config: too many port_forwards (max %d) - extra entries ignored",
             DS_MAX_PORT_FORWARDS);
     } else {
-      /* Unknown key — preserve verbatim so Android App metadata
+      /* Unknown key - preserve verbatim so Android App metadata
        * (run_at_boot, use_sparse_image, sparse_image_size_gb, etc.)
        * survives ds_config_save() unchanged. */
       add_unknown_line(cfg, line);
@@ -486,7 +489,7 @@ int ds_config_save(const char *config_path, struct ds_config *cfg) {
   char temp_path[PATH_MAX];
   snprintf(temp_path, sizeof(temp_path), "%s.tmp", config_path);
 
-  /* Step 1: Skip Step 1 — we now use the in-memory preservation from
+  /* Step 1: Skip Step 1 - we now use the in-memory preservation from
    * ds_config_load. This ensures mirroring and internal backups preserve all
    * metadata. */
 
@@ -496,7 +499,7 @@ int ds_config_save(const char *config_path, struct ds_config *cfg) {
     return -1;
 
   fprintf(f_out, "# Droidspaces Container Configuration\n");
-  fprintf(f_out, "# Generated automatically — Changes may be overwritten\n\n");
+  fprintf(f_out, "# Generated automatically - Changes may be overwritten\n\n");
 
   /* Write managed keys */
   if (cfg->container_name[0])
@@ -505,17 +508,13 @@ int ds_config_save(const char *config_path, struct ds_config *cfg) {
     fprintf(f_out, "hostname=%s\n", cfg->hostname);
 
   if (cfg->is_img_mount && cfg->rootfs_img_path[0]) {
-    char abs_path[PATH_MAX];
-    if (realpath(cfg->rootfs_img_path, abs_path))
-      fprintf(f_out, "rootfs_path=%s\n", abs_path);
-    else
-      fprintf(f_out, "rootfs_path=%s\n", cfg->rootfs_img_path);
+    char *abs_path = ds_resolve_path_arg(cfg->rootfs_img_path);
+    fprintf(f_out, "rootfs_path=%s\n", abs_path ? abs_path : cfg->rootfs_img_path);
+    free(abs_path);
   } else if (cfg->rootfs_path[0]) {
-    char abs_path[PATH_MAX];
-    if (realpath(cfg->rootfs_path, abs_path))
-      fprintf(f_out, "rootfs_path=%s\n", abs_path);
-    else
-      fprintf(f_out, "rootfs_path=%s\n", cfg->rootfs_path);
+    char *abs_path = ds_resolve_path_arg(cfg->rootfs_path);
+    fprintf(f_out, "rootfs_path=%s\n", abs_path ? abs_path : cfg->rootfs_path);
+    free(abs_path);
   }
 
   fprintf(f_out, "disable_ipv6=%d\n", cfg->disable_ipv6);

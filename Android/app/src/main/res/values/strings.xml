@@ -79,6 +79,8 @@
     <string name="amoled_mode_description">Pure black background for OLED displays</string>
     <string name="dynamic_color">Apply System\'s Default Color Palette</string>
     <string name="dynamic_color_description">Use Android 12+ Monet theming (Material You)</string>
+    <string name="daemon_mode">Daemon Mode</string>
+    <string name="daemon_mode_description">Run Droidspaces as a persistent system-level daemon to bypass seccomp blocks from Magisk/APatch, GrapheneOS, etc. This enables high-privilege operations by fetching and running commands from userspace (Reboot required).</string>
     <string name="about_section">About</string>
     <string name="about_droidspaces">About Droidspaces</string>
     <string name="about_description">LXC-Style container manager for Android</string>
@@ -91,6 +93,9 @@
     <string name="contributors">Contributors</string>
     <string name="github">GitHub</string>
     <string name="source_code">Source Code</string>
+    <string name="generate_bug_report">Generate a bug report</string>
+    <string name="generate_bug_report_description">Collect system info and logs for debugging</string>
+    <string name="bug_report_title">Bug Report</string>
     <string name="ok">OK</string>
 
     <!-- Containers Screen -->
@@ -437,5 +442,6 @@
     <string name="help_card_title">New to Droidspaces?</string>
     <string name="help_card_message">Tap here to learn how to setup your first Android container !</string>
     <string name="help_card_url">https://github.com/ravindu644/Droidspaces-OSS/blob/main/Documentation/Installation-Android.md</string>
+    <string name="reboot_recommended">Reboot recommended after installation to apply SELinux rules.</string>
 </resources>
 
