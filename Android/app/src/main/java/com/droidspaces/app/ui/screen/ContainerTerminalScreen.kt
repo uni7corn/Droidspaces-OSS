@@ -68,7 +68,6 @@ fun ContainerTerminalScreen(
     var binder by remember { mutableStateOf<TerminalSessionService.SessionBinder?>(null) }
 
     DisposableEffect(Unit) {
-        TerminalSessionService.start(context)
         val conn = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
                 binder = service as? TerminalSessionService.SessionBinder
@@ -126,6 +125,7 @@ fun ContainerTerminalScreen(
     }
 
     fun addTab(user: String) {
+        TerminalSessionService.start(context)
         val id = "${containerName}_${UUID.randomUUID().toString().take(8)}"
         val newTab = TerminalTab(id = id, user = user, label = "$user@$hostname")
         val currentIndex = tabs.indexOfFirst { it.id == activeTabId }
