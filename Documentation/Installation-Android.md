@@ -25,7 +25,7 @@ On the first launch, Droidspaces performs an **Atomic Installation** of the back
 
 You don't need to manually extract rootfs files. The app handles it:
 
-1. **Download a rootfs tarball**: We recommend the official [Linux Containers images](https://images.linuxcontainers.org/images/).
+1. **Download a rootfs tarball**: We recommend using our [official rootfs tarballs](https://github.com/ravindu644/Droidspaces-rootfs-builder/releases/latest) - which are **specifically optimized for Android** - or the official [Linux Containers images](https://images.linuxcontainers.org/images/).
 2. **Open the Containers Tab**: Tap the middle icon in the bottom navigation bar.
 3. **Add a Container**: Tap the **"+"** button at the bottom right.
 4. **Choose your Tarball**: Select the downloaded `.tar.xz` or `.tar.gz` file.
@@ -45,4 +45,5 @@ You can verify your system status at any time:
 ## Next Steps
 
 - [Android App Usage Guide](Usage-Android-App.md) for management details.
+- [GPU Acceleration Guide](GPU-Acceleration.md) to enable hardware-accelerated desktop environments.
 - [Linux CLI Guide](Linux-CLI.md) for expert command-line access.
