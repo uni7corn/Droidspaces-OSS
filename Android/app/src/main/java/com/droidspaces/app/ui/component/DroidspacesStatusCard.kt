@@ -21,8 +21,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.droidspaces.app.util.Constants
 import com.droidspaces.app.util.SystemInfoManager
 import com.droidspaces.app.R
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 enum class DroidspacesStatus {
     Working,
@@ -40,6 +44,7 @@ fun DroidspacesStatusCard(
     version: String? = null,
     isChecking: Boolean = false,
     isRootAvailable: Boolean = true,
+    refreshTrigger: Int = 0,
     onClick: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -61,9 +66,18 @@ fun DroidspacesStatusCard(
         )
     }
 
+    // Backend execution mode ("direct" or "daemon")
+    var backendMode by remember {
+        mutableStateOf<String?>(
+            if (status == DroidspacesStatus.Working) {
+                SystemInfoManager.getCachedBackendMode(context)
+            } else null
+        )
+    }
+
     // Check actual values in background and update with animation if changed
     // Use refresh method to bypass cache after backend installation/update
-    LaunchedEffect(status) {
+    LaunchedEffect(status, refreshTrigger) {
         if (status == DroidspacesStatus.Working || status == DroidspacesStatus.UpdateAvailable) {
             val actualRootVersion = SystemInfoManager.getRootProviderVersion(context)
             // Only update if it's different (triggers animation)
@@ -76,6 +90,16 @@ fun DroidspacesStatusCard(
             // Only update if it's different (triggers animation)
             if (actualDroidspacesVersion != null && actualDroidspacesVersion != droidspacesVersion) {
                 droidspacesVersion = actualDroidspacesVersion
+            }
+
+            // Query execution mode: "direct" or "daemon"
+            if (status == DroidspacesStatus.Working) {
+                withContext(Dispatchers.IO) {
+                    val actualMode = SystemInfoManager.getBackendMode(context)
+                    if (actualMode != backendMode) {
+                        backendMode = actualMode
+                    }
+                }
             }
         }
     }
@@ -153,32 +177,53 @@ fun DroidspacesStatusCard(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                // Status text based on actual status
-                Text(
-                    text = when {
-                        !isRootAvailable -> context.getString(R.string.root_unavailable)
-                        isChecking -> context.getString(R.string.backend_checking)
-                        status == DroidspacesStatus.Working -> context.getString(R.string.backend_installed)
-                        status == DroidspacesStatus.UpdateAvailable -> context.getString(R.string.backend_update_available)
-                        status == DroidspacesStatus.NotInstalled -> context.getString(R.string.backend_not_installed)
-                        status == DroidspacesStatus.Corrupted -> context.getString(R.string.backend_corrupted)
-                        status == DroidspacesStatus.Unsupported -> context.getString(R.string.backend_unsupported)
-                        status == DroidspacesStatus.ModuleMissing -> context.getString(R.string.backend_module_missing)
-                        else -> context.getString(R.string.backend_unknown)
-                    },
-                    style = MaterialTheme.typography.titleMedium,
-                    color = when {
-                        !isRootAvailable -> MaterialTheme.colorScheme.onErrorContainer
-                        status == DroidspacesStatus.Working -> MaterialTheme.colorScheme.onSecondaryContainer
-                        status == DroidspacesStatus.UpdateAvailable -> MaterialTheme.colorScheme.onErrorContainer
-                        status == DroidspacesStatus.NotInstalled -> MaterialTheme.colorScheme.onErrorContainer // Red text like KernelSU
-                        status == DroidspacesStatus.Corrupted -> MaterialTheme.colorScheme.onErrorContainer
-                        status == DroidspacesStatus.Unsupported -> MaterialTheme.colorScheme.onErrorContainer
-                        status == DroidspacesStatus.ModuleMissing -> MaterialTheme.colorScheme.onErrorContainer
-                        else -> MaterialTheme.colorScheme.onSecondaryContainer
-                    },
-                    fontWeight = FontWeight.SemiBold
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = when {
+                            !isRootAvailable -> context.getString(R.string.root_unavailable)
+                            isChecking -> context.getString(R.string.backend_checking)
+                            status == DroidspacesStatus.Working -> context.getString(R.string.backend_installed)
+                            status == DroidspacesStatus.UpdateAvailable -> context.getString(R.string.backend_update_available)
+                            status == DroidspacesStatus.NotInstalled -> context.getString(R.string.backend_not_installed)
+                            status == DroidspacesStatus.Corrupted -> context.getString(R.string.backend_corrupted)
+                            status == DroidspacesStatus.Unsupported -> context.getString(R.string.backend_unsupported)
+                            status == DroidspacesStatus.ModuleMissing -> context.getString(R.string.backend_module_missing)
+                            else -> context.getString(R.string.backend_unknown)
+                        },
+                        style = MaterialTheme.typography.titleMedium,
+                        color = when {
+                            !isRootAvailable -> MaterialTheme.colorScheme.onErrorContainer
+                            status == DroidspacesStatus.Working -> MaterialTheme.colorScheme.onSecondaryContainer
+                            status == DroidspacesStatus.UpdateAvailable -> MaterialTheme.colorScheme.onErrorContainer
+                            status == DroidspacesStatus.NotInstalled -> MaterialTheme.colorScheme.onErrorContainer
+                            status == DroidspacesStatus.Corrupted -> MaterialTheme.colorScheme.onErrorContainer
+                            status == DroidspacesStatus.Unsupported -> MaterialTheme.colorScheme.onErrorContainer
+                            status == DroidspacesStatus.ModuleMissing -> MaterialTheme.colorScheme.onErrorContainer
+                            else -> MaterialTheme.colorScheme.onSecondaryContainer
+                        },
+                        fontWeight = FontWeight.SemiBold
+                    )
+
+                    // Execution mode badge (DIRECT / DAEMON)
+                    if (backendMode != null && status == DroidspacesStatus.Working) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.12f),
+                            shape = RoundedCornerShape(6.dp)
+                        ) {
+                            Text(
+                                text = backendMode!!,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.sp,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
                 // Check root availability first - if root is unavailable, always show the grant message
                 if (!isRootAvailable) {
                     Text(

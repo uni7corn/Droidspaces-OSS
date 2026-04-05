@@ -1,5 +1,5 @@
 /*
- * Droidspaces v5 — High-performance Container Runtime
+ * Droidspaces v5 - High-performance Container Runtime
  *
  * Copyright (C) 2026 ravindu644 <droidcasts@protonmail.com>
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -81,7 +81,8 @@ void print_usage(void) {
       "                            if omitted. Stable across reboots.\n"
       "                            e.g. --nat-ip 172.28.5.10\n");
   printf(
-      "  -B, --bind-mount=SRC:DEST Bind mount host directory into container\n");
+      "  -B, --bind-mount, --bind=SRC:DEST\n"
+      "                            Bind mount host directory into container\n");
   printf("  -C, --conf=PATH           Load configuration from file\n");
   printf("      --reset               Reset config to defaults (keeps "
          "name/rootfs)\n");
@@ -257,11 +258,11 @@ static void enforce_nat_safety(struct ds_config *cfg, int argc, char **argv) {
 
   /* --upstream and --port are only meaningful with --net=nat */
   if (cfg->upstream_iface_count > 0 && cfg->net_mode != DS_NET_NAT) {
-    ds_warn("--upstream is only valid with --net=nat — ignoring");
+    ds_warn("--upstream is only valid with --net=nat - ignoring");
     cfg->upstream_iface_count = 0;
   }
   if (cfg->port_forward_count > 0 && cfg->net_mode != DS_NET_NAT) {
-    ds_warn("--port is only valid with --net=nat — ignoring");
+    ds_warn("--port is only valid with --net=nat - ignoring");
     cfg->port_forward_count = 0;
   }
 
@@ -335,6 +336,7 @@ int main(int argc, char **argv) {
       {"selinux-permissive", no_argument, 0, 'P'},
       {"volatile", no_argument, 0, 'V'},
       {"bind-mount", required_argument, 0, 'B'},
+      {"bind", required_argument, 0, 'B'},
       {"conf", required_argument, 0, 'C'},
       {"config", required_argument, 0, 'C'},
       {"env", required_argument, 0, 'E'},
@@ -350,6 +352,14 @@ int main(int argc, char **argv) {
 
   extern int opterr;
   opterr = 0;
+
+  /* Resolve relative path arguments to absolute before any parsing.
+   * The daemon runs from CWD='/' (daemonize calls chdir("/")), so a relative
+   * path like --conf=./file.conf would resolve against '/' in the re-exec'd
+   * child.  Doing this here - while we still own the user's CWD - means every
+   * subsequent getopt pass reads absolute paths, covering all execution modes.
+   */
+  ds_resolve_argv_paths(argc - 1, argv + 1);
 
   /*
    * Multi-pass argument parsing:
@@ -407,12 +417,38 @@ int main(int argc, char **argv) {
   optind = 0; /* Reset for next steps */
 
   /*
+   * Daemon Proxying:
+   * Optimistically attempt to proxy commands to the background daemon.
+   * If the daemon is not reachable, fall back to direct execution.
+   */
+  int is_daemon_cmd = (discovered_cmd && strcmp(discovered_cmd, "daemon") == 0);
+
+  /*
+   * Commands that do not require root access (docs, help, version) or
+   * must be run locally to avoid recursive loops (mode) are never proxied.
+   */
+  int is_stateless_cmd =
+      (discovered_cmd && (strcmp(discovered_cmd, "docs") == 0 ||
+                          strcmp(discovered_cmd, "help") == 0 ||
+                          strcmp(discovered_cmd, "version") == 0 ||
+                          strcmp(discovered_cmd, "mode") == 0));
+
+  if (!is_daemon_cmd && !is_stateless_cmd && getenv("DS_NO_PROXY") == NULL) {
+    int proxy_ret = ds_client_run(argc - 1, argv + 1);
+    if (proxy_ret != -2) {
+      ret = proxy_ret;
+      goto cleanup;
+    }
+  }
+
+  /*
    * Unified Configuration Discovery and Loading
    * 1. Try to load from explicitly provided config file.
    * 2. Otherwise try to auto-detect config from rootfs paths.
    * 3. Ensure we have a container name for stateful commands.
-   * 4. Perform a recovery scan to load from ~/.local/share/... if config hasn't
-   * been loaded yet.
+   * 4. Perform a recovery scan to load from
+   *    <workspace dir>/Containers/<name>/container.config if config hasn't
+   *    been loaded yet.
    */
   int is_stateful =
       (discovered_cmd && (strcmp(discovered_cmd, "stop") == 0 ||
@@ -689,8 +725,9 @@ int main(int argc, char **argv) {
                      ? (pf->container_port_end - pf->container_port)
                      : 0;
         if (hw != cw) {
-          ds_error("Port range width mismatch in --port: host %d vs container %d",
-                   hw + 1, cw + 1);
+          ds_error(
+              "Port range width mismatch in --port: host %d vs container %d",
+              hw + 1, cw + 1);
           ret = 1;
           goto cleanup;
         }
@@ -720,12 +757,12 @@ int main(int argc, char **argv) {
           int host_overlap = (hs1 <= he2 && hs2 <= he1);
 
           /* Container-side overlap */
-          uint16_t cs1 = pf->container_port,
-                   ce1 = pf->container_port_end ? pf->container_port_end
-                                                : pf->container_port;
-          uint16_t cs2 = ex->container_port,
-                   ce2 = ex->container_port_end ? ex->container_port_end
-                                                : ex->container_port;
+          uint16_t cs1 = pf->container_port, ce1 = pf->container_port_end
+                                                       ? pf->container_port_end
+                                                       : pf->container_port;
+          uint16_t cs2 = ex->container_port, ce2 = ex->container_port_end
+                                                       ? ex->container_port_end
+                                                       : ex->container_port;
           int cont_overlap = (cs1 <= ce2 && cs2 <= ce1);
 
           if (host_overlap || cont_overlap) {
@@ -899,6 +936,17 @@ int main(int argc, char **argv) {
     ret = 0;
     goto cleanup;
   }
+  if (strcmp(cmd, "docs") == 0) {
+    print_documentation(argv[0]);
+    ret = 0;
+    goto cleanup;
+  }
+
+  if (strcmp(cmd, "mode") == 0) {
+    printf("%s\n", ds_daemon_probe() ? "daemon" : "direct");
+    ret = 0;
+    goto cleanup;
+  }
 
   /* Root required commands */
   if (getuid() != 0) {
@@ -1019,6 +1067,16 @@ int main(int argc, char **argv) {
       goto cleanup;
     }
     ret = run_in_rootfs(&cfg, argc - (optind + 1), argv + (optind + 1));
+    goto cleanup;
+  }
+
+  if (strcmp(cmd, "daemon") == 0) {
+    if (getuid() != 0) {
+      ds_error("Root privileges required for daemon mode");
+      ret = 1;
+      goto cleanup;
+    }
+    ret = ds_daemon_run(cfg.foreground, argv);
     goto cleanup;
   }
 

@@ -1,5 +1,5 @@
 /*
- * Droidspaces v5 — High-performance Container Runtime
+ * Droidspaces v5 - High-performance Container Runtime
  *
  * Copyright (C) 2026 ravindu644 <droidcasts@protonmail.com>
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -105,9 +105,9 @@ static int check_seccomp(void) {
 + * This is accurate even when modules are built-in (=y) rather than loadable
 + * (=m), which is the common case on Android.
 + *
-+ * Both require root to open a NETLINK_ROUTE socket — guarded early.
++ * Both require root to open a NETLINK_ROUTE socket - guarded early.
 + * If a stale probe interface from a previous crashed session is present,
-+ * its existence already proves kernel support — treated as green.
++ * its existence already proves kernel support - treated as green.
 + *
 ---------------------------------------------------------------------------*/
 static int check_bridge_support(void) {
@@ -419,7 +419,7 @@ int check_requirements_detailed(void) {
                  check_veth_support(), "OPT");
 
   /* FINAL SUMMARY */
-  check_append("\n" C_BOLD "Summary:" C_RESET "\n");
+  check_append("\n" C_BOLD "Summary:" C_RESET "\n\n");
   if (missing_must > 0)
     check_append(
         "  [" C_RED "✗" C_RESET

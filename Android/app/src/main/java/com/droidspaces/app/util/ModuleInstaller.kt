@@ -44,13 +44,32 @@ object ModuleInstaller {
             tempDir.mkdirs()
 
             try {
+                // Manually handle the structure to be safe and simple
                 val assetFiles = assetManager.list("boot-module") ?: emptyArray()
                 for (fileName in assetFiles) {
                     val assetPath = "boot-module/$fileName"
-                    val tempFile = File(tempDir, fileName)
-                    assetManager.open(assetPath).use { inputStream ->
-                        FileOutputStream(tempFile).use { output ->
-                            inputStream.copyTo(output)
+                    val subAssets = assetManager.list(assetPath) ?: emptyArray()
+
+                    if (subAssets.isEmpty()) {
+                        // File
+                        val tempFile = File(tempDir, fileName)
+                        assetManager.open(assetPath).use { input ->
+                            tempFile.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                    } else {
+                        // Directory (e.g., etc)
+                        val subDir = File(tempDir, fileName)
+                        subDir.mkdirs()
+                        for (subFileName in subAssets) {
+                            val subAssetPath = "$assetPath/$subFileName"
+                            val tempFile = File(subDir, subFileName)
+                            assetManager.open(subAssetPath).use { input ->
+                                tempFile.outputStream().use { output ->
+                                    input.copyTo(output)
+                                }
+                            }
                         }
                     }
                 }
@@ -81,7 +100,7 @@ object ModuleInstaller {
 
             // Step 4: Set permissions
             onProgress(ModuleInstallationStep.SettingPermissions(MAGISK_MODULE_PATH))
-            val chmodScriptsResult = Shell.cmd("chmod 755 '$MAGISK_MODULE_PATH'/*.sh 2>&1 && chmod 644 '$MAGISK_MODULE_PATH'/*.prop 2>&1").exec()
+            val chmodScriptsResult = Shell.cmd("chmod 755 '$MAGISK_MODULE_PATH'/*.sh 2>&1 && chmod 644 '$MAGISK_MODULE_PATH'/*.prop 2>&1 && mkdir -p '$MAGISK_MODULE_PATH/etc' && chmod 644 '$MAGISK_MODULE_PATH'/etc/*.te 2>&1").exec()
             if (!chmodScriptsResult.isSuccess) {
                 return@withContext Result.failure(
                     Exception("Failed to set permissions: ${chmodScriptsResult.err.joinToString()}")
@@ -137,6 +156,13 @@ object ModuleInstaller {
             if (!verifyPropResult.isSuccess) {
                 return@withContext Result.failure(
                     Exception("module.prop verification failed")
+                )
+            }
+
+            val verifyTeResult = Shell.cmd("test -f '$MAGISK_MODULE_PATH/etc/droidspaces.te' 2>&1").exec()
+            if (!verifyTeResult.isSuccess) {
+                return@withContext Result.failure(
+                    Exception("droidspaces.te verification failed")
                 )
             }
 

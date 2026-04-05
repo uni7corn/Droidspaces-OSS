@@ -9,11 +9,17 @@ object Constants {
     const val INSTALL_PATH = "/data/local/Droidspaces/bin"
     const val DROIDSPACES_BINARY_NAME = "droidspaces"
     const val BUSYBOX_BINARY_NAME = "busybox"
+    const val MAGISKPOLICY_BINARY_NAME = "magiskpolicy"
     const val DROIDSPACES_BINARY_PATH = "$INSTALL_PATH/$DROIDSPACES_BINARY_NAME"
     const val BUSYBOX_BINARY_PATH = "$INSTALL_PATH/$BUSYBOX_BINARY_NAME"
+    const val MAGISKPOLICY_BINARY_PATH = "$INSTALL_PATH/$MAGISKPOLICY_BINARY_NAME"
+    const val MAGISK_MODULE_PATH = "/data/adb/modules/droidspaces"
+    const val DROIDSPACES_TE_PATH = MAGISK_MODULE_PATH + "/etc/droidspaces.te"
 
     // Container paths
     const val CONTAINERS_BASE_PATH = "/data/local/Droidspaces/Containers"
+    const val DAEMON_MODE_FILE = "/data/local/Droidspaces/.daemon_mode"
+    const val DAEMON_PID_FILE = "/data/local/Droidspaces/droidspacesd.pid"
     const val CONTAINER_CONFIG_FILE = "container.config"
 
     // Preferences keys
@@ -33,6 +39,8 @@ object Constants {
     const val KEY_USE_DYNAMIC_COLOR = "use_dynamic_color"
     const val KEY_THEME_PALETTE = "theme_palette"
     const val KEY_APP_LOCALE = "app_locale"
+    const val KEY_BACKEND_MODE = "backend_mode"
+    const val KEY_DAEMON_MODE_ENABLED = "daemon_mode_enabled"
 
     // Container log cache prefix
     const val KEY_CONTAINER_LOG_PREFIX = "container_log_"

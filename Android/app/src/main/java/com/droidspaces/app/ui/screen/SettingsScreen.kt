@@ -1,6 +1,7 @@
 package com.droidspaces.app.ui.screen
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.pm.PackageManager
@@ -37,6 +38,7 @@ import android.net.Uri
 import com.droidspaces.app.R
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.droidspaces.app.ui.component.AccentColorPicker
+import com.droidspaces.app.ui.component.BugReportDialog
 import com.droidspaces.app.ui.component.SwitchItem
 import com.droidspaces.app.ui.theme.ThemePalette
 import com.droidspaces.app.ui.theme.rememberThemeState
@@ -47,6 +49,8 @@ import com.droidspaces.app.util.ContributorManager
 import com.droidspaces.app.util.Contributor
 import androidx.core.content.edit
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -75,13 +79,35 @@ fun SettingsScreen(
     // About dialog state
     var showAboutDialog by remember { mutableStateOf(false) }
 
+    // Bug Report dialog state
+    var showBugReportDialog by remember { mutableStateOf(false) }
+
     // Language picker state
     var showLanguageDialog by remember { mutableStateOf(false) }
     var currentAppLocale by remember { mutableStateOf(LocaleHelper.getCurrentAppLocale(context)) }
 
-    // Listen for locale changes
+    // Daemon mode state
+    var isDaemonModeEnabled by remember { mutableStateOf(prefsManager.isDaemonModeEnabled) }
+
+    // Register SharedPreferences listener for daemon mode
+    DisposableEffect(prefsManager) {
+        val listener = SharedPreferences.OnSharedPreferenceChangeListener { _: SharedPreferences, key: String? ->
+            if (key == PreferencesManager.KEY_DAEMON_MODE_ENABLED) {
+                isDaemonModeEnabled = prefsManager.isDaemonModeEnabled
+            }
+        }
+        prefsManager.prefs.registerOnSharedPreferenceChangeListener(listener)
+        onDispose {
+            prefsManager.prefs.unregisterOnSharedPreferenceChangeListener(listener)
+        }
+    }
+
+    // Listen for locale changes and sync daemon mode from disk
     LaunchedEffect(Unit) {
         currentAppLocale = LocaleHelper.getCurrentAppLocale(context)
+        withContext(Dispatchers.IO) {
+            prefsManager.syncDaemonModeFromDisk()
+        }
     }
 
     Scaffold(
@@ -170,6 +196,18 @@ fun SettingsScreen(
                             Modifier
                         }
                     )
+            )
+
+            // Daemon Mode Toggle
+            SwitchItem(
+                icon = Icons.Default.SettingsBackupRestore,
+                title = context.getString(R.string.daemon_mode),
+                summary = context.getString(R.string.daemon_mode_description),
+                checked = isDaemonModeEnabled,
+                enabled = isRootAvailable,
+                onCheckedChange = { checked ->
+                    prefsManager.isDaemonModeEnabled = checked
+                }
             )
 
             // Requirements Card - clickable to navigate to requirements page
@@ -300,6 +338,55 @@ fun SettingsScreen(
 
             HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
 
+            // Bug Report Section
+            ListItem(
+                leadingContent = {
+                    Icon(
+                        imageVector = Icons.Default.BugReport,
+                        contentDescription = null,
+                        tint = if (isRootAvailable) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        }
+                    )
+                },
+                headlineContent = {
+                    Text(
+                        text = context.getString(R.string.generate_bug_report),
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = if (isRootAvailable) {
+                            MaterialTheme.colorScheme.onSurface
+                        } else {
+                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
+                        }
+                    )
+                },
+                supportingContent = {
+                    Text(
+                        text = context.getString(R.string.generate_bug_report_description),
+                        color = if (isRootAvailable) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                        }
+                    )
+                },
+                modifier = Modifier
+                    .then(
+                        if (isRootAvailable) {
+                            Modifier.clickable {
+                                showBugReportDialog = true
+                            }
+                        } else {
+                            Modifier
+                        }
+                    )
+            )
+
+            HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+
             // About Section
             Text(
                 text = context.getString(R.string.about_section),
@@ -339,6 +426,11 @@ fun SettingsScreen(
     // About Dialog
     if (showAboutDialog) {
         AboutDialog(onDismiss = { showAboutDialog = false })
+    }
+
+    // Bug Report Dialog
+    if (showBugReportDialog) {
+        BugReportDialog(onDismiss = { showBugReportDialog = false })
     }
 
     // Language Picker Dialog
