@@ -135,6 +135,13 @@
     <string name="volatile_option">Volatile</string>
     <string name="cgroupv1_option">Cgroup V1</string>
     <string name="deadlock_shield_option">Deadlock Shield</string>
+    <string name="installation_setup_summary">Installation Summary</string>
+    <string name="review_configuration">Review Configuration</string>
+    <string name="tarball_label">Tarball</string>
+    <string name="directory_label">Directory</string>
+    <string name="installation_path_label">Installation Path</string>
+    <string name="no_options_enabled">No additional options enabled</string>
+    <string name="options">Options</string>
 
     <!-- Container Details Screen -->
     <string name="container_info">Container Info</string>
@@ -420,4 +427,3 @@
     <string name="help_card_url">https://github.com/ravindu644/Droidspaces-OSS/blob/main/Documentation/Installation-Android.md</string>
     <string name="reboot_recommended">Reboot recommended after installation to apply SELinux rules.</string>
 </resources>
-
