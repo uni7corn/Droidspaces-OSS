@@ -1,5 +1,5 @@
 /*
- * Droidspaces v5 — High-performance Container Runtime
+ * Droidspaces v5 - High-performance Container Runtime
  *
  * Copyright (C) 2026 ravindu644 <droidcasts@protonmail.com>
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -55,8 +55,17 @@ void ds_env_boot_setup(struct ds_config *cfg) {
   /* Capture TERM before clearenv() */
   const char *saved_term = getenv("TERM");
   char term_buf[64] = "xterm-256color";
-  if (saved_term)
-    safe_strncpy(term_buf, saved_term, sizeof(term_buf));
+
+  if (saved_term && saved_term[0]) {
+    /* Bug fix: TWRP terminal leaks internal variables like 'bg1.25' as TERM.
+     * Some recovery environments/kernels also set TERM to version strings.
+     * If it contains dots or appears to be a garbage value, use the default. */
+    if (strchr(saved_term, '.') || strncmp(saved_term, "bg", 2) == 0) {
+      /* likely garbage - keep default xterm-256color */
+    } else {
+      safe_strncpy(term_buf, saved_term, sizeof(term_buf));
+    }
+  }
 
   clearenv();
   set_container_defaults(term_buf);
@@ -72,7 +81,7 @@ void ds_env_boot_setup(struct ds_config *cfg) {
   /* Standard Linux LANG default */
   setenv("LANG", "en_US.UTF-8", 0);
 
-  /* User-defined variables — applied LAST so they override our defaults above
+  /* User-defined variables - applied LAST so they override our defaults above
    */
   for (int i = 0; i < cfg->env_var_count; i++) {
     setenv(cfg->env_vars[i].key, cfg->env_vars[i].value, 1);
@@ -110,7 +119,7 @@ void ds_env_save(const char *path, struct ds_config *cfg) {
 }
 
 /* ---------------------------------------------------------------------------
- * parse_env_file_to_config() — parse user environment variables into memory
+ * parse_env_file_to_config() - parse user environment variables into memory
  *
  * Called before fork() while host paths are still accessible.
  * Supports unlimited line length and variable count via dynamic allocation.
@@ -207,7 +216,7 @@ void parse_env_file_to_config(const char *path, struct ds_config *cfg) {
       continue;
     }
 
-    /* Extract value — everything after '=' */
+    /* Extract value - everything after '=' */
     char *val = eq + 1;
     size_t val_len = strlen(val);
     char *value = NULL;

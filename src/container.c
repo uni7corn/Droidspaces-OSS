@@ -1,5 +1,5 @@
 /*
- * Droidspaces v5 — High-performance Container Runtime
+ * Droidspaces v5 - High-performance Container Runtime
  *
  * Copyright (C) 2026 ravindu644 <droidcasts@protonmail.com>
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -8,7 +8,7 @@
 #include "droidspace.h"
 
 /* ---------------------------------------------------------------------------
- * External Command Lock — CLI-only ownership
+ * External Command Lock - CLI-only ownership
  *
  * The lock represents exactly ONE thing: an external CLI command is actively
  * managing this container. ONLY the CLI parent creates/removes locks.
@@ -25,7 +25,7 @@ static void get_lock_path(const char *name, char *buf, size_t size) {
   snprintf(buf, size, "%.2048s/%.256s" DS_EXT_LOCK, get_pids_dir(), safe_name);
 }
 
-/* Create external command lock — ONLY called by CLI parent.
+/* Create external command lock - ONLY called by CLI parent.
  * Returns: 0 on success, -1 if lock already held by a live process. */
 static int acquire_external_lock(const char *name) {
   char lock_path[PATH_MAX];
@@ -33,12 +33,12 @@ static int acquire_external_lock(const char *name) {
 
   /* Check if lock already exists */
   if (access(lock_path, F_OK) == 0) {
-    /* Lock exists — verify if holder is still alive */
+    /* Lock exists - verify if holder is still alive */
     char buf[32];
     if (read_file(lock_path, buf, sizeof(buf)) > 0) {
       pid_t holder = (pid_t)atoi(buf);
       if (holder > 0 && holder != getpid() && kill(holder, 0) == 0) {
-        /* Lock holder is alive and NOT us — cannot acquire */
+        /* Lock holder is alive and NOT us - cannot acquire */
         ds_warn("Cannot acquire lock: held by process %d", holder);
         return -1;
       }
@@ -57,7 +57,7 @@ static int acquire_external_lock(const char *name) {
   return write_file_atomic(lock_path, pid_str);
 }
 
-/* Release external command lock — ONLY called by CLI parent.
+/* Release external command lock - ONLY called by CLI parent.
  * Verifies ownership before removing. */
 static void release_external_lock(const char *name) {
   char lock_path[PATH_MAX];
@@ -108,7 +108,7 @@ void write_plain_env_file(const char *src, const char *dst) {
   fclose(out);
 }
 
-/* Check if external command lock exists — called by monitor (READ ONLY).
+/* Check if external command lock exists - called by monitor (READ ONLY).
  * Returns: 1 if lock exists and holder is alive, 0 otherwise. */
 int is_external_lock_active(const char *name) {
   char lock_path[PATH_MAX];
@@ -117,7 +117,7 @@ int is_external_lock_active(const char *name) {
   if (access(lock_path, F_OK) != 0)
     return 0; /* No lock */
 
-  /* Lock exists — verify holder is alive */
+  /* Lock exists - verify holder is alive */
   char buf[32];
   if (read_file(lock_path, buf, sizeof(buf)) > 0) {
     pid_t holder = (pid_t)atoi(buf);
@@ -140,7 +140,7 @@ int is_external_lock_active(const char *name) {
 
 static void cleanup_container_resources(struct ds_config *cfg, pid_t pid,
                                         int skip_unmount, int force_cleanup) {
-  /* Flush filesystem buffers (skip if force cleanup — sync can hang on
+  /* Flush filesystem buffers (skip if force cleanup - sync can hang on
    * zombie-held fs) */
   if (!force_cleanup)
     sync();
@@ -152,7 +152,7 @@ static void cleanup_container_resources(struct ds_config *cfg, pid_t pid,
 
   /* 1. Cleanup firmware path (hw_access mode only; skip on force-cleanup
    * since accessing a zombie-held rootfs can hang).
-   * Use cfg->rootfs_path directly - it is already realpath'd and valid for
+   * Use cfg->rootfs_path directly - it is already fully resolved and valid for
    * both dir-based and img-based modes at this point. */
   if (!force_cleanup && cfg->hw_access && cfg->rootfs_path[0]) {
     char fw_path[PATH_MAX + 16];
@@ -242,7 +242,7 @@ int is_valid_container_pid(pid_t pid) {
 
   /* Primary marker: /run/droidspaces must exist inside the container.
    * This is the one authoritative marker written by droidspaces on boot.
-   * We do NOT require /run/systemd/container — Alpine/runit/openrc never
+   * We do NOT require /run/systemd/container - Alpine/runit/openrc never
    * write that file, causing scan to be blind to non-systemd distros. */
   if (build_proc_root_path(pid, DS_DROIDSPACES_MARKER, path, sizeof(path)) < 0)
     return 0;
@@ -263,6 +263,7 @@ int is_valid_container_pid(pid_t pid) {
  * ---------------------------------------------------------------------------*/
 
 int start_rootfs(struct ds_config *cfg) {
+  int has_side_effects = 0;
   /* 0. Early restart detection: check for external lock from previous stop
    *    command to detect a preserved mount for reuse. */
   int lock_acquired = 0;
@@ -271,7 +272,7 @@ int start_rootfs(struct ds_config *cfg) {
     get_lock_path(cfg->container_name, lock_path, sizeof(lock_path));
 
     if (access(lock_path, F_OK) == 0) {
-      /* This looks like a restart handoff — take ownership of the lock */
+      /* This looks like a restart handoff - take ownership of the lock */
       if (acquire_external_lock(cfg->container_name) == 0) {
         lock_acquired = 1;
 
@@ -292,7 +293,7 @@ int start_rootfs(struct ds_config *cfg) {
           safe_strncpy(cfg->img_mount_point, cfg->rootfs_path,
                        sizeof(cfg->img_mount_point));
         } else {
-          /* Mount not active — remove invalid lock */
+          /* Mount not active - remove invalid lock */
           release_external_lock(cfg->container_name);
           lock_acquired = 0;
         }
@@ -304,29 +305,37 @@ int start_rootfs(struct ds_config *cfg) {
    *     This prevents symlink-based attacks and ensures that all subsequent
    *     operations use the intended location. */
   if (cfg->rootfs_path[0]) {
-    char resolved[PATH_MAX];
-    if (realpath(cfg->rootfs_path, resolved) == NULL) {
-      ds_error("Failed to resolve rootfs path '%s': %s", cfg->rootfs_path,
-               strerror(errno));
+    char *abs_path = ds_resolve_path_arg(cfg->rootfs_path);
+    if (!abs_path || access(abs_path, F_OK) != 0) {
+      ds_error("Failed to resolve rootfs path '%s': %s",
+               abs_path ? abs_path : cfg->rootfs_path, strerror(errno));
+      free(abs_path);
       goto cleanup;
     }
-    safe_strncpy(cfg->rootfs_path, resolved, sizeof(cfg->rootfs_path));
+    safe_strncpy(cfg->rootfs_path, abs_path, sizeof(cfg->rootfs_path));
+    free(abs_path);
   }
   if (cfg->rootfs_img_path[0]) {
-    char resolved[PATH_MAX];
-    if (realpath(cfg->rootfs_img_path, resolved) == NULL) {
+    char *abs_path = ds_resolve_path_arg(cfg->rootfs_img_path);
+    if (!abs_path || access(abs_path, F_OK) != 0) {
       ds_error("Failed to resolve rootfs image path '%s': %s",
-               cfg->rootfs_img_path, strerror(errno));
+               abs_path ? abs_path : cfg->rootfs_img_path, strerror(errno));
+      free(abs_path);
       goto cleanup;
     }
-    safe_strncpy(cfg->rootfs_img_path, resolved, sizeof(cfg->rootfs_img_path));
+    safe_strncpy(cfg->rootfs_img_path, abs_path, sizeof(cfg->rootfs_img_path));
+    free(abs_path);
   }
 
   /* 1. Preparation */
   ensure_workspace();
 
-  if (cfg->selinux_permissive)
-    android_set_selinux_permissive();
+  /* If the user requested permissive mode, ensure it's applied.
+   * ds_set_selinux_permissive() is a no-op if host is already permissive. */
+  if (cfg->selinux_permissive) {
+    ds_set_selinux_permissive();
+  }
+
   if (cfg->android_storage && !is_android())
     ds_warn("--enable-android-storage is only supported on Android hosts. "
             "Skipping.");
@@ -349,6 +358,8 @@ int start_rootfs(struct ds_config *cfg) {
   if (cfg->hostname[0] == '\0') {
     safe_strncpy(cfg->hostname, cfg->container_name, sizeof(cfg->hostname));
   }
+
+  has_side_effects = 1;
 
   /* 2. Mount rootfs image if provided (using the resolved name) */
   if (cfg->rootfs_img_path[0] && !lock_acquired) {
@@ -469,7 +480,7 @@ int start_rootfs(struct ds_config *cfg) {
   }
 
   /* Firmware path - hw_access mode only.
-   * By this point cfg->rootfs_path is fully resolved (realpath'd) and the
+   * By this point cfg->rootfs_path is fully resolved and the
    * image is mounted if applicable.  firmware_path_add() internally checks
    * that /lib/firmware exists in the rootfs before touching the sysfs node. */
   if (cfg->hw_access) {
@@ -479,6 +490,8 @@ int start_rootfs(struct ds_config *cfg) {
   }
 
   cfg->tty_count = DS_MAX_TTYS;
+  ds_fix_host_ptys();
+
   if (ds_terminal_create(&cfg->console) < 0) {
     ds_error("Failed to allocate console PTY");
     goto cleanup;
@@ -602,7 +615,7 @@ int start_rootfs(struct ds_config *cfg) {
       }
       ns_flags |= CLONE_NEWCGROUP;
     } else {
-      /* Legacy kernel without force flag — skip cgroupns, run in host
+      /* Legacy kernel without force flag - skip cgroupns, run in host
        * cgroupns with full rights so setup_cgroups() can create named
        * v1 hierarchies. */
     }
@@ -623,7 +636,7 @@ int start_rootfs(struct ds_config *cfg) {
      *   4. Monitor sees WEXITSTATUS(mid)==249 → loop back
      *
      * This eliminates ghost containers because the Monitor never handles
-     * SIGHUP — it only checks a deterministic exit code. */
+     * SIGHUP - it only checks a deterministic exit code. */
   reboot_loop:;
     /* Close existing pipes from previous cycle to prevent FD leaks */
     if (cfg->net_ready_pipe[0] >= 0) {
@@ -679,6 +692,22 @@ int start_rootfs(struct ds_config *cfg) {
       }
     }
 
+    /* Stdio handling for monitor in background mode (early redirection).
+     * We must do this BEFORE forking the intermediate process, otherwise
+     * the intermediate inherits the user's stdout/stderr (e.g. a pipe)
+     * and holds it open indefinitely, causing CLI hangs in direct mode.
+     * We only keep it open if we haven't reached the networking setup yet,
+     * as setup_veth_host_side() might still need to print logs. */
+    if (!cfg->foreground && !stdio_redirected) {
+      int devnull = open("/dev/null", O_RDWR);
+      if (devnull >= 0) {
+        dup2(devnull, 0);
+        /* Note: we don't redirect 1 and 2 here yet because we want to see
+         * networking setup logs. We'll do a full redirect after the fork. */
+        close(devnull);
+      }
+    }
+
     pid_t mid_pid = fork();
     if (mid_pid < 0)
       _exit(EXIT_FAILURE);
@@ -713,6 +742,28 @@ int start_rootfs(struct ds_config *cfg) {
         _exit(internal_boot(cfg));
       }
 
+      /* Intermediate: redirect stdio to /dev/null NOW (after forking init).
+       * It only exists to wait for init and has no business talking to the
+       * user's terminal or holding pipes open.
+       *
+       * BUG FIX: this redirect was previously placed BEFORE the fork(), which
+       * caused init_pid to inherit /dev/null for fd 1 and fd 2. Every
+       * ds_log() call inside internal_boot() writes to stdout, so all boot
+       * logs were silently swallowed by /dev/null - visible only in the log
+       * file (which uses direct file I/O, not stdout). Moving the redirect
+       * here means only the intermediate itself goes silent; internal_boot()
+       * retains the original terminal fds until it redirects to /dev/console
+       * at its own step 24. */
+      if (!cfg->foreground) {
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+          dup2(devnull, 0);
+          dup2(devnull, 1);
+          dup2(devnull, 2);
+          close(devnull);
+        }
+      }
+
       /* Send init PID to monitor so it can target /proc/<pid>/ns/net */
       if (cfg->net_mode != DS_NET_HOST && mid_sync_pipe[1] >= 0) {
         if (write(mid_sync_pipe[1], &init_pid, sizeof(pid_t)) !=
@@ -733,7 +784,7 @@ int start_rootfs(struct ds_config *cfg) {
         close(sync_pipe[1]);
         sync_pipe[1] = -1;
       } else {
-        /* Reboot cycle — update PID file directly so
+        /* Reboot cycle - update PID file directly so
          * 'droidspaces show/status' report the correct PID. */
         char pid_str[32];
         snprintf(pid_str, sizeof(pid_str), "%d", init_pid);
@@ -812,7 +863,7 @@ int start_rootfs(struct ds_config *cfg) {
 
         if (cfg->net_mode == DS_NET_NAT) {
           if (setup_veth_host_side(cfg, netns_pid) < 0) {
-            ds_warn("[NET] Monitor: setup_veth_host_side failed — "
+            ds_warn("[NET] Monitor: setup_veth_host_side failed - "
                     "container will have no internet");
           } else {
             /* Start the dynamic route monitor thread to handle WiFi/Mobile
@@ -891,12 +942,12 @@ int start_rootfs(struct ds_config *cfg) {
 
     /* ── Reboot detection (internal reboot) ── */
     if (WIFEXITED(status) && WEXITSTATUS(status) == DS_REBOOT_EXIT) {
-      /* Check for external lock — if exists, abort reboot and let CLI handle it
+      /* Check for external lock - if exists, abort reboot and let CLI handle it
        */
       if (is_external_lock_active(cfg->container_name)) {
         write_monitor_debug_log(
             cfg->container_name,
-            "External command lock detected — aborting internal reboot");
+            "External command lock detected - aborting internal reboot");
         goto monitor_cleanup_and_exit;
       }
 
@@ -960,15 +1011,15 @@ int start_rootfs(struct ds_config *cfg) {
       goto reboot_loop;
     }
 
-    /* Not a reboot — check if external command is handling cleanup */
+    /* Not a reboot - check if external command is handling cleanup */
     if (is_external_lock_active(cfg->container_name)) {
       write_monitor_debug_log(cfg->container_name,
-                              "External command lock detected — yielding "
+                              "External command lock detected - yielding "
                               "cleanup to CLI");
       goto monitor_cleanup_and_exit;
     }
 
-    /* Normal exit — monitor does cleanup */
+    /* Normal exit - monitor does cleanup */
     write_monitor_debug_log(cfg->container_name, "Monitor performing cleanup");
 
     /* Before cleaning up the container's cgroup subtree, move the
@@ -1018,8 +1069,9 @@ int start_rootfs(struct ds_config *cfg) {
          monitor_pid);
 
   /* 9. Android: Remount /data with suid for directory-based containers.
-   * This is required for sudo/su to work if the rootfs is on /data. */
-  if (is_android() && !cfg->rootfs_img_path[0])
+   * This is required for sudo/su to work if the rootfs is on /data.
+   * Skip on ramfs (recovery) as it's unnecessary and likely to fail. */
+  if (is_android() && !cfg->rootfs_img_path[0] && !is_ramfs("/"))
     android_remount_data_suid();
 
   /* Log volatile mode */
@@ -1111,8 +1163,11 @@ int start_rootfs(struct ds_config *cfg) {
 cleanup:
   /* Centralized host-side cleanup IF we are returning error.
    * This ensures image mounts and tracking files are reverted on fatal boot
-   * errors. */
-  cleanup_container_resources(cfg, cfg->container_pid, 0, 1 /* force */);
+   * errors. Only execute if we successfully crossed the point of creating
+   * effects. */
+  if (has_side_effects) {
+    cleanup_container_resources(cfg, cfg->container_pid, 0, 1 /* force */);
+  }
   if (lock_acquired)
     release_external_lock(cfg->container_name);
 
@@ -1223,7 +1278,7 @@ int stop_rootfs(struct ds_config *cfg, int skip_unmount) {
   }
 
   /* 4. Firmware cleanup (hw_access mode only).
-   * Skip when unkillable — accessing zombie-held rootfs can hang. */
+   * Skip when unkillable - accessing zombie-held rootfs can hang. */
   if (cfg->img_mount_point[0] && !unkillable && cfg->hw_access) {
     char fw_path[PATH_MAX + 16];
     snprintf(fw_path, sizeof(fw_path), "%s/lib/firmware", cfg->img_mount_point);
@@ -1377,7 +1432,7 @@ int enter_rootfs(struct ds_config *cfg, const char *user) {
       _exit(EXIT_FAILURE);
 
     /* ---------------------------------------------------------------
-     * LXC-STYLE SESSION SETUP — intermediate becomes session leader
+     * LXC-STYLE SESSION SETUP - intermediate becomes session leader
      * ---------------------------------------------------------------
      * Ubuntu 24.04+ login (util-linux) calls vhangup() as part of its
      * "secure login" sequence: hang up the old session, reopen the
@@ -1386,13 +1441,13 @@ int enter_rootfs(struct ds_config *cfg, const char *user) {
      * vhangup() sends SIGHUP to the SESSION LEADER of the controlling
      * terminal.  In our OLD design the grandchild (bash) was the session
      * leader, so it received SIGHUP, killed login's process group, then
-     * killed itself — the terminal collapsed.
+     * killed itself - the terminal collapsed.
      *
      * THE FIX (matches lxc-attach behaviour):
      *   • The INTERMEDIATE does setsid() + TIOCSCTTY here (not the shell).
      *   • The intermediate ignores SIGHUP.
      *   • The grandchild (bash) is a child of the intermediate's session
-     *     and is therefore NOT the session leader — it never receives
+     *     and is therefore NOT the session leader - it never receives
      *     the SIGHUP that vhangup() generates.
      *   • login's vhangup() → SIGHUP → intermediate → ignored → bash lives.
      *   • login then does setsid() + open(/dev/pts/N without O_NOCTTY) to
@@ -1423,7 +1478,7 @@ int enter_rootfs(struct ds_config *cfg, const char *user) {
       _exit(EXIT_FAILURE);
     if (shell_pid == 0) {
       /* The controlling terminal and session leader were established in
-       * the intermediate (parent of this fork) — do NOT call setsid()
+       * the intermediate (parent of this fork) - do NOT call setsid()
        * or TIOCSCTTY here.  This process (bash) is a child member of
        * the intermediate's session and inherits pts/1 as its ctty.
        * Being a non-session-leader is deliberate: when the user runs
@@ -1725,7 +1780,7 @@ int show_info(struct ds_config *cfg, int trust_cfg_pid) {
     /* SELinux */
     if (access("/sys/fs/selinux/enforce", R_OK) == 0) {
       const char *sel =
-          android_get_selinux_status() == 0 ? "Permissive" : "Enforcing";
+          ds_get_selinux_status() == 0 ? "Permissive" : "Enforcing";
       printf("  SELinux: %s\n", sel);
     }
 
@@ -1751,9 +1806,11 @@ int show_info(struct ds_config *cfg, int trust_cfg_pid) {
     /* HW access */
     int hw = detect_hw_access_in_container(pid);
     if (hw)
-      printf("  " C_RED "HW access:" C_RESET " enabled\n");
+      printf("  " C_RED "HW access: full" C_RESET "\n");
+    else if (cfg->gpu_mode)
+      printf("  HW access: GPU\n");
     else
-      printf("  HW access: disabled\n");
+      printf("  HW access: " C_DIM "none" C_RESET "\n");
   } else {
     /* Best effort: read os-release from rootfs path */
     if (cfg->rootfs_path[0]) {

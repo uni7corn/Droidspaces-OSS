@@ -3,6 +3,7 @@
 [![Telegram channel](https://img.shields.io/badge/Telegram-Channel-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/Droidspaces)
 [![Android support](https://img.shields.io/badge/-Android-3DDC84?style=for-the-badge&logo=android&logoColor=white)](#a-android-devices)
 [![Linux desktop](https://img.shields.io/badge/-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black)](#b-linux-desktop)
+[![Translation status](https://img.shields.io/weblate/progress/droidspaces?server=https://hosted.weblate.org&style=for-the-badge&label=Translated&logo=weblate)](https://hosted.weblate.org/engage/droidspaces/)
 
 ---
 
@@ -128,6 +129,7 @@ What makes Droidspaces unique is its **zero-dependency, native execution** on bo
 - [Requirements](#requirements)
     - [Android](#a-android-devices)
         - [Rooting Requirements](#rooting-requirements)
+        - [Known Quirks](#known-quirks)
         - [Android Kernel Requirements](#android-kernel-requirements)
             - [Non-GKI (Legacy Kernels)](#non-GKI)
             - [GKI (Modern Kernels)](#GKI)
@@ -135,7 +137,9 @@ What makes Droidspaces unique is its **zero-dependency, native execution** on bo
 - [Installation](#installation)
 - [Usage](#usage)
 - [Cool Things You Can Do (Tailscale, Docker, etc.)](./Documentation/Cool-things-you-can-do.md)
+- [Troubleshooting](./Documentation/Troubleshooting.md)
 - [Additional Documentation](#additional-documentation)
+- [Contributing](#contribution)
 - [Credits](#credits)
 
 ---
@@ -160,14 +164,17 @@ The entire runtime is a **single static binary** under 260KB, compiled against m
 
 | Feature | Description |
 |---------|-------------|
-| **Init System Support** | Run systemd, OpenRC or any other init system as PID 1. Full service management, journald logging, and proper boot/shutdown sequences. |
+| **Init System Support** | Run systemd, OpenRC or any other init system as PID 1. Full service management, journald logging, and proper boot/shutdown/reboot sequences. |
+| **Deep Android Integration** | Supports two daemon modes: **Native init.rc** (lowest-level integration with auto-spawn/unkillable persistence) and **Userspace Daemon** (app-togglable, starts via `post-fs-data.sh`, no image modification required). **Both modes bypass root-domain seccomp blocks to ensure stable container lifecycles** [[init.rc Developer Guide](./init/README.md)]. |
 | **Namespace Isolation** | Complete isolation via PID, MNT, UTS, IPC, and Cgroup namespaces. Each container has its own process tree, mount table, hostname, IPC resources, and cgroup hierarchy. |
 | **Network Isolation** | **3 Networking Modes (Host, NAT, None)**. Pure network isolation via `CLONE_NEWNET` (NAT/None modes) or shared host networking (Host mode). Works on both Android and Linux. |
+| **Android GPU Acceleration** | Native hardware acceleration for Qualcomm Adreno GPUs via the Turnip driver. Use our [pre-built rootfs templates](https://github.com/ravindu644/Droidspaces-rootfs-builder/releases/latest) for an out-of-the-box experience. [[More info](./Documentation/GPU-Acceleration.md)] |
+| **Linux GPU Acceleration** | Zero-configuration GPU acceleration for AMD and Intel GPUs on Linux desktop hosts. [[More info](./Documentation/GPU-Acceleration.md)] |
 | **Port Forwarding** | Forward host ports to the container in NAT mode (e.g., `--port 22:22`). Supports TCP and UDP, as well as ranges like `1-500:1-500`. |
 | **Volatile Mode** | Ephemeral containers using OverlayFS. All changes are stored in RAM and discarded on exit. Perfect for testing and development. |
 | **Custom Bind Mounts** | Map host directories into containers at arbitrary mount points. Supports both chained (`-B a:b -B c:d`) and comma-separated (`-B a:b,c:d`) syntax. |
 | **Config File Support** | Load configurations directly from `.config` files using `--conf`. Integrates seamlessly with the CLI overrides (`--reset` is supported) and automatically syncs to the workspace for persistence. |
-| **Hardware Access Mode** | Expose host hardware (GPU, cameras, sensors, USB) to the container via devtmpfs. Enables GPU acceleration with Turnip + Zink / Panfrost on supported Android devices. PulseAudio and Virgl are also supported in Android |
+| **Hardware Access Mode** | Expose host hardware (GPU, cameras, sensors, USB, block devices) directly to your containers with a single configuration toggle. |
 | **Multiple Containers** | Run unlimited containers simultaneously, each with its own name, PID file, and configuration. Start, stop, enter, and manage them independently. |
 | **In-container Reboot Support** | Handles in-container `reboot(2)` syscalls via a strict 3-level PID hierarchy to autonomously reinitialize the container sequence - TL;DR: you can restart the container remotely without touching Droidspaces! |
 | **Android Storage** | Bind-mount `/storage/emulated/0` into the container for direct access to the device's shared storage. |
@@ -206,6 +213,8 @@ The entire runtime is a **single static binary** under 260KB, compiled against m
 
 | Aspect | LXC/Docker | Droidspaces |
 |--------|------------|-------------|
+| **Deep Android Integration** | None. Runs as a foreign process. | **Superior**. Native `init.rc` daemon or `post-fs-data.sh` modes. |
+| **Persistence** | Poor. Easily killed by system. | **Unkillable**. Init-level auto-spawn support. |
 | Dependencies | Many (liblxc, runc, containerd, etc.) | Zero. Single static binary. |
 | Setup Complexity | High. Requires Termux, cross-compiled libraries, manual config files. | Low. Download and install the APK, then run it on Android; download, extract, and run it on Linux. |
 | Older kernels Support | Spotty. Many features break on older kernels. | Full. Adaptive seccomp shield handles kernel quirks. |
@@ -244,12 +253,22 @@ Your device must be rooted. The following rooting methods have been tested:
 | Root Method | Status | Notes |
 |-------------|--------|-------|
 | **KernelSU** | Fully Supported | Tested and stable. **Recommended**. Since Droidspaces requires a custom kernel anyway, we recommend adding KernelSU to your kernel. |
-| **APatch** | Partially Supported. Not Recommended | Init fails to start due to a seccomp block related to the `u:r:magisk:s0` SELinux domain. This happens only on some devices, while some users run Droidspaces with APatch successfully [[more info](https://github.com/ravindu644/Droidspaces-OSS/issues/11#issuecomment-4036688816)]. |
-| **Magisk** | Partially Supported. Not Recommended | Same situation as APatch. Some users succeed, while others do not. [[more info](https://github.com/ravindu644/Droidspaces-OSS/issues/11#issuecomment-4036688816)]|
+| **APatch** | Supported* | Requires enabling **Daemon Mode** in the Droidspaces app and a device reboot to bypass root-domain seccomp restrictions on userspace-initiated runtimes. |
+| **Magisk** | Supported* | Requires enabling **Daemon Mode** in the Droidspaces app and a device reboot to bypass root-domain seccomp restrictions on userspace-initiated runtimes. |
+
+> [!TIP]
+>
+> Daemon Mode moves the container lifecycle management from the app's userspace to a persistent background service.
+
+<a id="known-quirks"></a>
 
 > [!CAUTION]
 >
-> **GrapheneOS is not supported** because it blocks critical syscalls used for namespace isolation and containerization, making it impossible to run a userspace runtime like Droidspaces even with root access.
+> **GrapheneOS is not supported** - because it blocks critical syscalls used for namespace isolation and containerization, making it impossible to run a userspace runtime like Droidspaces even with root access.
+>
+> **SuSFS is not supported** - DO NOT REPORT ANY BUGS WHEN USING SUSFS. If you must use SuSFS with Droidspaces, ensure that "HIDE SUS MOUNTS FOR ALL PROCESSES" is disabled in your SuSFS4KSU settings to avoid container boot failures.
+>
+> **KernelSU OverlayFS Meta module mode is not supported** - Move to Magic Mount mode instead of using OverlayFS due to a strange bug where the Droidspaces boot module causes bootloops for no reason. This is not an issue on our side.
 
 <a id="android-kernel-requirements"></a>
 
@@ -267,7 +286,7 @@ See: [Legacy Kernel Configuration](Documentation/Kernel-Configuration.md#configu
 
 ##### GKI (Modern Kernels)
 Covers kernels: **5.4, 5.10, 5.15, 6.1+**. These kernels require additional steps to handle ABI breakage caused by configuration changes.
-See: [Modern GKI Kernel Configuration](Documentation/Kernel-Configuration.md#configuring-gki-kernels-modern-kernels)
+See: [Modern GKI Kernel Configuration](Documentation/Kernel-Configuration.md#configuring-gki-kernels)
 
 **Next Steps for Kernel Support:**
 - **Check automatically**: Use the built-in requirements checker in the Android app (**Settings** -> **Requirements**).
@@ -322,25 +341,23 @@ sudo ./droidspaces check
 | Document | Description |
 |----------|-------------|
 | [Feature Deep Dives](Documentation/Features.md) | Detailed explanation of each major feature. |
-| [Cool Things You Can Do](Documentation/Cool-things-you-can-do.md) | Advanced setups like Secure Mobile Server with Tailscale. |
-| [Troubleshooting](Documentation/Troubleshooting.md) | Common issues and their solutions. |
 | [Uninstallation Guide](Documentation/Uninstallation.md) | How to remove Droidspaces from your system. |
 
 ---
 
-## License
-
-Droidspaces is licensed under the [GNU General Public License v3.0](./LICENSE).
-
-Copyright (C) 2026 [ravindu644](https://github.com/ravindu644) and contributors.
-
----
+<a id="contribution"></a>
 
 ## Contributing
 
-Contributions are welcome. Please open an issue or pull request on the [GitHub repository](https://github.com/ravindu644/Droidspaces-OSS).
+Contributions are welcome - feel free to open an issue or pull request on the [GitHub repository](https://github.com/ravindu644/Droidspaces-OSS).
 
 For questions or support, join the [Telegram channel](http://t.me/Droidspaces).
+
+To contribute translations for the Android app, visit the Weblate project:
+
+<a href="https://hosted.weblate.org/engage/droidspaces/">
+<img src="https://hosted.weblate.org/widget/droidspaces/open-graph.png" alt="Translation status" />
+</a>
 
 ---
 
@@ -352,7 +369,16 @@ Droidspaces is built upon the incredible work of the open-source community. Spec
 
 *   **[LXC](https://github.com/lxc/lxc)** - For the core architectural vision and inspiration for modern Linux containerization.
 *   **[Brutal-Busybox](https://github.com/feravolt/Brutal_busybox)** - For the statically-linked BusyBox binaries used in the Android userspace app to perform certain operations.
+*   **[Magisk](https://github.com/topjohnwu/Magisk)** - For the `magiskpolicy` utility, providing the core engine for live SELinux patching.
 *   **[KernelSU-Next](https://github.com/KernelSU-Next/KernelSU-Next)**, **[MMRL](https://github.com/MMRLApp/MMRL)**, and **[LSPatch](https://github.com/LSPosed/LSPatch)** - For inspiring our modern UI design language and Android user experience.
 *   **[ReTerminal](https://github.com/RohitKushvaha01/ReTerminal)**, **[Termux](https://github.com/termux/termux-app)** , **[LXC-Manager](https://github.com/Container-On-Android/LXC-Manager)** - Terminal Backend for the built-in Terminal emulator.
+
+---
+
+## License
+
+Droidspaces is licensed under the [GNU General Public License v3.0](./LICENSE).
+
+Copyright (C) 2026 [ravindu644](https://github.com/ravindu644) and contributors.
 
 ---

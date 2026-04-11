@@ -1,7 +1,6 @@
 package com.droidspaces.app.util
 
 import android.content.Context
-import android.util.Log
 import com.topjohnwu.superuser.Shell
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -34,6 +33,9 @@ object ModuleInstaller {
             val tempDir = File(context.cacheDir, "boot-module-temp")
             val assetManager = context.assets
 
+            // Pre-check: Is the system binary symlink enabled?
+            val wasSymlinkEnabled = SymlinkInstaller.isSymlinkEnabled()
+
             // Step 1: Remove old module directory
             onProgress(ModuleInstallationStep.RemovingOldModule(MAGISK_MODULE_PATH))
             Shell.cmd("rm -rf '$MAGISK_MODULE_PATH' 2>&1").exec()
@@ -44,13 +46,32 @@ object ModuleInstaller {
             tempDir.mkdirs()
 
             try {
+                // Manually handle the structure to be safe and simple
                 val assetFiles = assetManager.list("boot-module") ?: emptyArray()
                 for (fileName in assetFiles) {
                     val assetPath = "boot-module/$fileName"
-                    val tempFile = File(tempDir, fileName)
-                    assetManager.open(assetPath).use { inputStream ->
-                        FileOutputStream(tempFile).use { output ->
-                            inputStream.copyTo(output)
+                    val subAssets = assetManager.list(assetPath) ?: emptyArray()
+
+                    if (subAssets.isEmpty()) {
+                        // File
+                        val tempFile = File(tempDir, fileName)
+                        assetManager.open(assetPath).use { input ->
+                            tempFile.outputStream().use { output ->
+                                input.copyTo(output)
+                            }
+                        }
+                    } else {
+                        // Directory (e.g., etc)
+                        val subDir = File(tempDir, fileName)
+                        subDir.mkdirs()
+                        for (subFileName in subAssets) {
+                            val subAssetPath = "$assetPath/$subFileName"
+                            val tempFile = File(subDir, subFileName)
+                            assetManager.open(subAssetPath).use { input ->
+                                tempFile.outputStream().use { output ->
+                                    input.copyTo(output)
+                                }
+                            }
                         }
                     }
                 }
@@ -81,49 +102,14 @@ object ModuleInstaller {
 
             // Step 4: Set permissions
             onProgress(ModuleInstallationStep.SettingPermissions(MAGISK_MODULE_PATH))
-            val chmodScriptsResult = Shell.cmd("chmod 755 '$MAGISK_MODULE_PATH'/*.sh 2>&1 && chmod 644 '$MAGISK_MODULE_PATH'/*.prop 2>&1").exec()
+            val chmodScriptsResult = Shell.cmd("chmod 755 '$MAGISK_MODULE_PATH'/*.sh 2>&1 && chmod 644 '$MAGISK_MODULE_PATH'/*.prop 2>&1 && mkdir -p '$MAGISK_MODULE_PATH/etc' && chmod 644 '$MAGISK_MODULE_PATH'/etc/*.te 2>&1").exec()
             if (!chmodScriptsResult.isSuccess) {
                 return@withContext Result.failure(
                     Exception("Failed to set permissions: ${chmodScriptsResult.err.joinToString()}")
                 )
             }
 
-            // Step 5: Create system/bin directory and symlink (non-critical, warnings only)
-            val systemBinDir = "$MAGISK_MODULE_PATH/system/bin"
-            val symlinkPath = "$systemBinDir/droidspaces"
-            val mkdirBinResult = Shell.cmd("mkdir -p '$systemBinDir' 2>&1").exec()
-            if (!mkdirBinResult.isSuccess) {
-                Log.w("ModuleInstaller", "Warning: Failed to create system/bin directory: ${mkdirBinResult.err.joinToString()}")
-            } else {
-                // Create symlink from system/bin/droidspaces to the actual binary
-                val binaryPath = Constants.DROIDSPACES_BINARY_PATH
-
-                // Verify symlink target exists
-                val targetCheck = Shell.cmd("test -f '$binaryPath'").exec()
-                if (!targetCheck.isSuccess) {
-                    Log.e("ModuleInstaller", "Critical Error: Symlink target $binaryPath does not exist. Binaries were likely not installed correctly.")
-                    // Still attempt to create it (Magisk might work later), but log the error
-                }
-
-                // Remove existing symlink/file if it exists
-                Shell.cmd("rm -f '$symlinkPath' 2>&1").exec()
-                // Create symlink
-                val symlinkResult = Shell.cmd("ln -sf '$binaryPath' '$symlinkPath' 2>&1").exec()
-                if (!symlinkResult.isSuccess) {
-                    Log.w("ModuleInstaller", "Warning: Failed to create symlink from $symlinkPath to $binaryPath: ${symlinkResult.err.joinToString()}")
-                } else {
-                    // Ensure symlink is executable (though it should inherit from target)
-                    val chmodSymlinkResult = Shell.cmd("chmod 755 '$symlinkPath' 2>&1").exec()
-                    if (!chmodSymlinkResult.isSuccess) {
-                        Log.w("ModuleInstaller", "Warning: Failed to set symlink permissions: ${chmodSymlinkResult.err.joinToString()}")
-                    } else {
-                        Log.i("ModuleInstaller", "Successfully created symlink: $symlinkPath -> $binaryPath")
-                    }
-                }
-
-            }
-
-            // Step 6: Verify installation
+            // Step 5: Verify installation
             onProgress(ModuleInstallationStep.Verifying(MAGISK_MODULE_PATH))
             val verifyDirResult = Shell.cmd("test -d '$MAGISK_MODULE_PATH' 2>&1").exec()
             val verifyPropResult = Shell.cmd("test -f '$MODULE_PROP_PATH' 2>&1").exec()
@@ -140,10 +126,16 @@ object ModuleInstaller {
                 )
             }
 
-            // Symlink verification is non-critical - just log a warning if it doesn't exist
-            val verifySymlinkResult = Shell.cmd("test -L '$symlinkPath' 2>&1").exec()
-            if (!verifySymlinkResult.isSuccess) {
-                Log.w("ModuleInstaller", "Warning: Symlink verification failed - symlink may not be available in system PATH")
+            val verifyTeResult = Shell.cmd("test -f '$MAGISK_MODULE_PATH/etc/droidspaces.te' 2>&1").exec()
+            if (!verifyTeResult.isSuccess) {
+                return@withContext Result.failure(
+                    Exception("droidspaces.te verification failed")
+                )
+            }
+
+            // Restore symlink if it was previously enabled
+            if (wasSymlinkEnabled) {
+                SymlinkInstaller.enable()
             }
 
             onProgress(ModuleInstallationStep.Success)

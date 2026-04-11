@@ -1,5 +1,5 @@
 /*
- * Droidspaces v5 — High-performance Container Runtime
+ * Droidspaces v5 - High-performance Container Runtime
  *
  * Copyright (C) 2026 ravindu644 <droidcasts@protonmail.com>
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -16,9 +16,9 @@ int is_android(void) {
   if (cached_result != -1)
     return cached_result;
 
-  /* Check for Android-specific environments or devices */
+  /* Check for Android-specific environments or files */
   if (getenv("ANDROID_ROOT") || access("/system/bin/app_process", F_OK) == 0 ||
-      access("/dev/binder", F_OK) == 0 || access("/dev/ashmem", F_OK) == 0)
+      access("/system/build.prop", F_OK) == 0)
     cached_result = 1;
   else
     cached_result = 0;
@@ -63,35 +63,6 @@ void android_optimizations(int enable) {
     run_command_quiet(args2);
     char *args3[] = {"dumpsys", "deviceidle", "enable", NULL};
     run_command_quiet(args3);
-  }
-}
-
-/* ---------------------------------------------------------------------------
- * SELinux management
- * ---------------------------------------------------------------------------*/
-
-int android_get_selinux_status(void) {
-  char buf[16];
-  if (read_file("/sys/fs/selinux/enforce", buf, sizeof(buf)) < 0)
-    return -1;
-  return atoi(buf);
-}
-
-void android_set_selinux_permissive(void) {
-  int status = android_get_selinux_status();
-  if (status == -1) {
-    ds_warn("SELinux not supported or interface missing. Skipping permissive "
-            "mode.");
-    return;
-  }
-
-  if (status == 1) {
-    ds_log("Setting SELinux to permissive...");
-    if (write_file("/sys/fs/selinux/enforce", "0") < 0) {
-      /* Try setenforce command as fallback */
-      char *args[] = {"setenforce", "0", NULL};
-      run_command_quiet(args);
-    }
   }
 }
 

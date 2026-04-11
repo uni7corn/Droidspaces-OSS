@@ -39,7 +39,7 @@ import com.droidspaces.app.util.SystemInfoManager
 import com.droidspaces.app.util.PreferencesManager
 import com.droidspaces.app.util.FilePickerUtils
 import com.droidspaces.app.ui.component.ContainerCard
-import com.droidspaces.app.ui.component.ContainerLogViewer
+import com.droidspaces.app.ui.component.TerminalDialog
 import com.droidspaces.app.ui.component.EmptyState
 import com.droidspaces.app.ui.component.ErrorState
 import com.droidspaces.app.ui.component.RootUnavailableState
@@ -255,7 +255,7 @@ fun ContainersScreen(
 
             // Execute command using logger callback pattern (same as installation).
             // Pass operationCompletedMessage so the success line is logged inside executeCommand
-            // in guaranteed order on Main.immediate — before this coroutine resumes.
+            // in guaranteed order on Main.immediate - before this coroutine resumes.
             // This eliminates the race where logger.i() calls posted from here could
             // interleave with the exit-code line logged inside executeCommand.
             val success = ContainerOperationExecutor.executeCommand(
@@ -541,8 +541,8 @@ fun ContainersScreen(
             }
             val logs = memoryLogs.ifEmpty { cachedLogs }
             val isBlocking = runningOperationContainer == containerName // Blocking when operation is running
-            ContainerLogViewer(
-                containerName = containerName,
+            TerminalDialog(
+                title = context.getString(R.string.logs_title, containerName),
                 logs = logs,
                 onDismiss = {
                     showLogViewerFor = null

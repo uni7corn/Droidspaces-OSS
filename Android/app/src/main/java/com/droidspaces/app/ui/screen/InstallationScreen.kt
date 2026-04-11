@@ -26,9 +26,13 @@ import com.topjohnwu.superuser.Shell
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.droidspaces.app.R
+import com.droidspaces.app.util.Constants
+
+import com.droidspaces.app.ui.viewmodel.AppStateViewModel
 
 @Composable
 fun InstallationScreen(
+    appStateViewModel: AppStateViewModel,
     onInstallationComplete: () -> Unit
 ) {
     val context = LocalContext.current
@@ -39,6 +43,7 @@ fun InstallationScreen(
     var isSuccess by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var isInstallingModule by remember { mutableStateOf(false) }
+    var rebootRecommended by remember { mutableStateOf(false) }
 
     // Check backend status and determine what to install
     LaunchedEffect(Unit) {
@@ -49,24 +54,49 @@ fun InstallationScreen(
 
             isInstalling = true
 
+            val whichBackendMode = withContext(Dispatchers.IO) {
+                com.droidspaces.app.util.SystemInfoManager.getBackendMode(context)
+            }
+            val wasDaemon = whichBackendMode == "DAEMON"
+
             val isAtomicUpdate = backendStatus is DroidspacesBackendStatus.UpdateAvailable
-            
+
             isInstallingModule = false
 
-            if (!isAtomicUpdate) {
-                // Clean Slate: Nuke everything and reinstall from scratch
-                // Performs clean installation for: Available (Reinstall), Corrupted, NotInstalled, etc.
-                currentStep = InstallationStep.CreatingDirectories("Nuking existing backend...")
-                Shell.cmd("rm -rf '/data/adb/modules/droidspaces' 2>&1").exec()
-                Shell.cmd("rm -rf '/data/local/Droidspaces/bin' 2>&1").exec()
+            // Check if SELinux policy exists anywhere BEFORE we start nuking things
+            // We check both the module path and the backend backup path
+            val sepolicyExists = withContext(Dispatchers.IO) {
+                Shell.cmd("test -f ${Constants.DROIDSPACES_TE_PATH}").exec().isSuccess
+            }
+            if (!sepolicyExists) {
+                rebootRecommended = true
             }
 
-            // Step 2: Install binaries (Clean Slate recreates, Atomic Update replaces via mv -f)
+            // Capture symlink state before any module directory removal
+            val wasSymlinkEnabled = withContext(Dispatchers.IO) {
+                com.droidspaces.app.util.SymlinkInstaller.isSymlinkEnabled()
+            }
+
+            if (!isAtomicUpdate) {
+                // Clean Slate: Remove the old module, but NEVER the bin directory
+                // (the daemon's g_self_path fix means the old binary stays valid
+                //  until the daemon is restarted, and the new binary is already
+                //  atomically in place at the canonical path).
+                currentStep = InstallationStep.CreatingDirectories("Nuking existing module...")
+                Shell.cmd("rm -rf '/data/adb/modules/droidspaces' 2>&1").exec()
+            }
+
+
+            // Step 2: Install binaries (atomic mv to canonical path - safe even while daemon is running)
             val binaryResult = BinaryInstaller.install(context) { step ->
                 currentStep = step
             }
             binaryResult.fold(
                 onSuccess = {
+                    // Signal the running daemon (if any) that the binary was swapped
+                    if (wasDaemon) {
+                        BinaryInstaller.signalDaemon()
+                    }
                     // Step 3: Install module
                     isInstallingModule = true
                     val moduleResult = ModuleInstaller.install(context) { step ->
@@ -74,20 +104,35 @@ fun InstallationScreen(
                     }
                     moduleResult.fold(
                         onSuccess = {
+                            // Restore symlink if it was enabled before the update
+                            if (wasSymlinkEnabled) {
+                                withContext(Dispatchers.IO) {
+                                    com.droidspaces.app.util.SymlinkInstaller.enable()
+                                }
+                            }
                             isSuccess = true
                             isInstalling = false
                             isInstallingModule = false
+                            // Proactive refresh to update UI state before user navigates back
+                            appStateViewModel.resetForPostInstallation()
+                            appStateViewModel.forceRefresh()
                         },
                         onFailure = { error ->
                             errorMessage = error.message ?: context.getString(R.string.module_installation_failed)
                             isInstalling = false
                             isInstallingModule = false
+                            // Refresh even on failure to update error status
+                            appStateViewModel.resetForPostInstallation()
+                            appStateViewModel.forceRefresh()
                         }
                     )
                 },
                 onFailure = { error ->
                     errorMessage = error.message ?: context.getString(R.string.binary_installation_failed)
                     isInstalling = false
+                    // Refresh even on failure
+                    appStateViewModel.resetForPostInstallation()
+                    appStateViewModel.forceRefresh()
                 }
             )
 
@@ -152,6 +197,7 @@ fun InstallationScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                             textAlign = TextAlign.Center
                         )
+
                     }
                     errorMessage != null -> {
                         Text(
@@ -206,6 +252,33 @@ fun InstallationScreen(
                                 }
                             }
                         }
+                    }
+                }
+
+                if (rebootRecommended) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 12.dp),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Info,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = context.getString(R.string.reboot_recommended),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium,
+                            textAlign = TextAlign.Center
+                        )
                     }
                 }
             }

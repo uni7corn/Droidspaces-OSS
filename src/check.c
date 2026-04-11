@@ -1,5 +1,5 @@
 /*
- * Droidspaces v5 — High-performance Container Runtime
+ * Droidspaces v5 - High-performance Container Runtime
  *
  * Copyright (C) 2026 ravindu644 <droidcasts@protonmail.com>
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -75,20 +75,17 @@ int check_ns(int flag, const char *name) {
 }
 
 static int check_pivot_root(void) {
-  struct statfs st;
-  if (statfs("/", &st) < 0)
+  /* Probe the syscall directly instead of guessing from fstype.
+   * pivot_root(".", ".") returns EINVAL (bad args) when the syscall is
+   * present but args are wrong, or ENOSYS when not compiled in.
+   * This works correctly even on ramfs/rootfs roots (e.g. recovery env). */
+  int ret = syscall(__NR_pivot_root, ".", ".");
+  if (ret < 0 && errno == ENOSYS)
     return 0;
-  /* pivot_root is not supported if the root is on ramfs/tmpfs (unless it's a
-   * submount) */
-  /* RAMFS_MAGIC = 0x858458f6, TMPFS_MAGIC = 0x01021994 */
-  return (st.f_type != 0x858458f6);
+  return 1;
 }
 
 static int check_loop(void) { return access("/dev/loop-control", F_OK) == 0; }
-
-static int check_cgroup_devices(void) {
-  return grep_file("/proc/cgroups", "devices");
-}
 
 static int check_seccomp(void) {
   /* Probe for SECCOMP_MODE_FILTER support */
@@ -105,9 +102,9 @@ static int check_seccomp(void) {
 + * This is accurate even when modules are built-in (=y) rather than loadable
 + * (=m), which is the common case on Android.
 + *
-+ * Both require root to open a NETLINK_ROUTE socket — guarded early.
++ * Both require root to open a NETLINK_ROUTE socket - guarded early.
 + * If a stale probe interface from a previous crashed session is present,
-+ * its existence already proves kernel support — treated as green.
++ * its existence already proves kernel support - treated as green.
 + *
 ---------------------------------------------------------------------------*/
 static int check_bridge_support(void) {
@@ -164,7 +161,9 @@ static int check_kernel_version_supported(void) {
  * Minimal check for 'start' (used internaly)
  * ---------------------------------------------------------------------------*/
 
-int check_requirements(void) {
+int check_requirements(void) { return check_requirements_hw(0); }
+
+int check_requirements_hw(int hw_access) {
   int missing = 0;
 
   if (!check_root()) {
@@ -174,10 +173,10 @@ int check_requirements(void) {
     missing++;
   }
 
-  if (grep_file("/proc/filesystems", "devtmpfs") == 0) {
-    ds_error("devtmpfs is not supported by the kernel");
-    ds_log("This is a REQUIRED feature for hardware node management.");
-    missing++;
+  /* devtmpfs is only needed for --hw-access; without it we use tmpfs */
+  if (hw_access && grep_file("/proc/filesystems", "devtmpfs") == 0) {
+    ds_warn("Hardware access mode is active but this kernel does not support "
+            "devtmpfs. GPU and hardware nodes may not be available.");
   }
 
   /* Functional namespace checks */
@@ -206,14 +205,6 @@ int check_requirements(void) {
     ds_error("pivot_root syscall is not supported on the current filesystem");
     ds_log("Droidspaces requires a rootfs that supports pivot_root (not "
            "ramfs).");
-    missing++;
-  }
-
-  /* Cgroup check (v1 devices or v2) */
-  if (!check_cgroup_devices()) {
-    ds_error("Kernel missing required cgroup support");
-    ds_log("Droidspaces requires cgroup 'devices' controller (missing "
-           "'devices' in /proc/cgroups).");
     missing++;
   }
 
@@ -323,19 +314,6 @@ int check_requirements_detailed(void) {
   print_ds_check("IPC namespace", "Inter-process communication isolation",
                  has_ipc_ns, "MUST");
 
-  int has_devtmpfs = grep_file("/proc/filesystems", "devtmpfs");
-  if (!has_devtmpfs)
-    missing_must++;
-  print_ds_check("devtmpfs support", "Kernel support for devtmpfs",
-                 has_devtmpfs, "MUST");
-
-  int has_cg_dev = check_cgroup_devices();
-  if (!has_cg_dev)
-    missing_must++;
-  print_ds_check("cgroup devices support",
-                 "Control Groups (devices controller) support", has_cg_dev,
-                 "MUST");
-
   int has_pivot = check_pivot_root();
   if (!has_pivot)
     missing_must++;
@@ -392,6 +370,12 @@ int check_requirements_detailed(void) {
   print_ds_check("Cgroup namespace", "Control Group namespace isolation",
                  check_ns(CLONE_NEWCGROUP, "cgroup"), "OPT");
 
+  int has_devtmpfs = grep_file("/proc/filesystems", "devtmpfs");
+  print_ds_check(
+      "devtmpfs support",
+      "Required for hardware access mode; tmpfs fallback used otherwise",
+      has_devtmpfs, "OPT");
+
   /* OPTIONAL */
   check_append("\n" C_BOLD "[OPTIONAL]" C_RESET
                "\nThese features are optional and only used for specific "
@@ -419,7 +403,7 @@ int check_requirements_detailed(void) {
                  check_veth_support(), "OPT");
 
   /* FINAL SUMMARY */
-  check_append("\n" C_BOLD "Summary:" C_RESET "\n");
+  check_append("\n" C_BOLD "Summary:" C_RESET "\n\n");
   if (missing_must > 0)
     check_append(
         "  [" C_RED "✗" C_RESET

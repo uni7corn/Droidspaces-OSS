@@ -1,5 +1,5 @@
 /*
- * Droidspaces v5 — High-performance Container Runtime
+ * Droidspaces v5 - High-performance Container Runtime
  *
  * Copyright (C) 2026 ravindu644 <droidcasts@protonmail.com>
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -99,7 +99,7 @@ int internal_boot(struct ds_config *cfg) {
    * handshake) so loopback is still configured.  No veth is created.
    * ─────────────────────────────────────────────────────────────────────── */
   if (cfg->net_mode != DS_NET_HOST) {
-    ds_log("[NET] Child: net_mode=%d — starting handshake with monitor",
+    ds_log("[NET] Child: net_mode=%d - starting handshake with monitor",
            cfg->net_mode);
 
     /* We write to net_ready, read from net_done */
@@ -180,7 +180,7 @@ int internal_boot(struct ds_config *cfg) {
     return -1;
   }
 
-  /* Detect init system once — used for seccomp and cgroup setup */
+  /* Detect init system once - used for seccomp and cgroup setup */
   int is_systemd = is_systemd_rootfs(cfg->rootfs_path);
 
   /* Apply Seccomp filters early for host protection.
@@ -242,23 +242,19 @@ int internal_boot(struct ds_config *cfg) {
   }
 
   /* 8. Setup /dev (device nodes, devtmpfs) */
-  if (setup_dev(".", cfg->hw_access) < 0) {
+  if (setup_dev(".", cfg->hw_access, cfg->gpu_mode) < 0) {
     ds_error("Failed to setup /dev.");
     return -1;
   }
 
-  /* 9. Scan host GPU device GIDs (BEFORE pivot_root — need host /dev) */
-  gid_t gpu_gids[DS_MAX_GPU_GROUPS];
-  int gpu_gid_count = 0;
+  /* 9. Log hardware access mode (BEFORE pivot_root) */
   if (!cfg->reboot_cycle) {
-    if (cfg->hw_access) {
+    if (cfg->hw_access)
       ds_log("Setting up hardware access...");
-      gpu_gid_count = scan_host_gpu_gids(gpu_gids, DS_MAX_GPU_GROUPS);
-    } else {
+    else if (cfg->gpu_mode)
+      ds_log("Setting up GPU-only access...");
+    else
       ds_log("Hardware access disabled: using isolated tmpfs...");
-    }
-  } else if (cfg->hw_access) {
-    gpu_gid_count = scan_host_gpu_gids(gpu_gids, DS_MAX_GPU_GROUPS);
   }
 
   /* 10. Mount virtual filesystems (proc, sys) */
@@ -386,15 +382,15 @@ int internal_boot(struct ds_config *cfg) {
   write_file(marker, ""); /* empty UUID marker */
 
   /* Save a normalized copy of the config inside /run for metadata recovery.
-   * ds_config_save() resolves rootfs_path to absolute via realpath(),
-   * preventing broken relative paths in the internal backup. */
+   * Path arguments are resolved to absolute via ds_resolve_path_arg()
+   * ensuring every persistent boot knows exactly where its assets live. */
   if (ds_config_save("run/droidspaces/container.config", cfg) < 0) {
     ds_warn("Boot: Failed to save internal configuration backup");
   }
 
   write_file("run/droidspaces/name", cfg->container_name);
 
-  /* Save mount path for recovery — survives host-side .mount sidecar deletion
+  /* Save mount path for recovery - survives host-side .mount sidecar deletion
    */
   if (cfg->img_mount_point[0])
     write_file("run/droidspaces/mount", cfg->img_mount_point);
@@ -410,12 +406,27 @@ int internal_boot(struct ds_config *cfg) {
   /* 16. Custom bind mounts */
   setup_custom_binds(cfg, ".");
 
-  /* 17. pivot_root */
-  if (syscall(SYS_pivot_root, ".", ".old_root") < 0) {
+  /* 17. pivot_root with MS_MOVE+chroot fallback for ramfs/rootfs environments
+   * (e.g. Android recovery) where pivot_root(2) always returns EINVAL because
+   * the kernel refuses to pivot when new_root is on the same underlying fs as
+   * the current root (ramfs has no backing device, self-bind doesn't help).
+   * MS_MOVE atomically relocates the new root onto / and chroot(2) locks us
+   * in - exactly what switch_root(8) does internally. */
+  int used_ms_move = 0;
+  if (is_ramfs("/")) {
+    ds_log("Detected rootfs/ramfs root - automatically falling back to "
+           "MS_MOVE+chroot");
+    used_ms_move = 1;
+    if (mount(".", "/", NULL, MS_MOVE, NULL) < 0) {
+      ds_error("MS_MOVE fallback failed: %s", strerror(errno));
+      return -1;
+    }
+    if (chroot(".") < 0) {
+      ds_error("chroot(\".\") after MS_MOVE failed: %s", strerror(errno));
+      return -1;
+    }
+  } else if (syscall(SYS_pivot_root, ".", ".old_root") < 0) {
     ds_error("pivot_root failed: %s", strerror(errno));
-    /* pivot_root might fail if we are on ramfs.
-     * We don't die here because we might want to try fallback or
-     * at least log it properly. But in this implementation, it's critical. */
     return -1;
   }
 
@@ -434,7 +445,7 @@ int internal_boot(struct ds_config *cfg) {
   fix_networking_rootfs(cfg);
 
   /* 20. Setup GPU groups and X11 socket (AFTER pivot_root) */
-  setup_hardware_access(cfg, gpu_gids, gpu_gid_count);
+  setup_hardware_access(cfg);
 
   /* Log bind mounts and boot (after hw-access logs for clean ordering) */
   if (!cfg->reboot_cycle) {
@@ -450,11 +461,16 @@ int internal_boot(struct ds_config *cfg) {
   printf("\r\n");
   fflush(stdout);
 
-  /* 21. Cleanup .old_root */
-  if (umount2("/.old_root", MNT_DETACH) < 0)
-    ds_warn("Failed to unmount .old_root: %s", strerror(errno));
-  else
+  /* 21. Cleanup .old_root (skip when MS_MOVE fallback was used - there is no
+   * old root mountpoint to detach in that path). */
+  if (!used_ms_move) {
+    if (umount2("/.old_root", MNT_DETACH) < 0)
+      ds_warn("Failed to unmount .old_root: %s", strerror(errno));
+    else
+      rmdir("/.old_root");
+  } else {
     rmdir("/.old_root");
+  }
 
   /* 22. Set container identity for systemd/openrc */
   write_file(DS_SYSTEMD_CONTAINER_MARKER, "droidspaces");
@@ -466,7 +482,7 @@ int internal_boot(struct ds_config *cfg) {
   /* 23b. Integration with /etc/profile.d for universal sourcing */
   if (access("/etc/profile.d", F_OK) == 0) {
     const char *profile_link = "/etc/profile.d/droidspaces_env.sh";
-    /* Always recreate — avoids TOCTOU and fixes stale symlinks after rootfs
+    /* Always recreate - avoids TOCTOU and fixes stale symlinks after rootfs
      * swap */
     unlink(profile_link);
     if (symlink("/run/droidspaces.env", profile_link) < 0 && errno != EEXIST) {
@@ -521,7 +537,7 @@ int internal_boot(struct ds_config *cfg) {
   /* Tell systemd which cgroup hierarchy the container was actually set up
    * with.  We use statfs() on /sys/fs/cgroup (now the container root after
    * pivot_root) rather than guessing from kernel version.  setup_cgroups()
-   * already decided the layout — we just reflect what it mounted:
+   * already decided the layout - we just reflect what it mounted:
    *   cgroup2fs  → unified (v2 only)  → unified_cgroup_hierarchy=1
    *   tmpfs      → legacy / hybrid    → unified_cgroup_hierarchy=0
    * This is exactly what LXC does via lxc.init.cmd. */

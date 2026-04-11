@@ -43,7 +43,11 @@ class TerminalSessionService : Service() {
                 val info = SessionInfo(containerName, user)
                 sessionList[sessionId] = info
                 globalSessionList[sessionId] = info
-                updateNotification()
+                if (sessions.size == 1) {
+                    promoteToForeground()
+                } else {
+                    updateNotification()
+                }
             }
         }
 
@@ -65,7 +69,15 @@ class TerminalSessionService : Service() {
                     runCatching {
                         sessions[id]?.apply { if (emulator != null) finishIfRunning() }
                         sessions.remove(id)
-                        if (sessions.isEmpty()) stopSelf()
+                        if (sessions.isEmpty()) {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                                stopForeground(STOP_FOREGROUND_REMOVE)
+                            } else {
+                                @Suppress("DEPRECATION")
+                                stopForeground(true)
+                            }
+                            stopSelf()
+                        }
                     }.onFailure { it.printStackTrace() }
                 }, 300)
             }.onFailure { it.printStackTrace() }
@@ -78,7 +90,12 @@ class TerminalSessionService : Service() {
             // Clear UI state IMMEDIATELY.
             sessionList.clear()
             globalSessionList.clear()
-            updateNotification()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                stopForeground(STOP_FOREGROUND_REMOVE)
+            } else {
+                @Suppress("DEPRECATION")
+                stopForeground(true)
+            }
 
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                 sessions.values.forEach { it.finishIfRunning() }
@@ -114,6 +131,9 @@ class TerminalSessionService : Service() {
     override fun onCreate() {
         super.onCreate()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) createNotificationChannel()
+    }
+
+    private fun promoteToForeground() {
         val notification = buildNotification()
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
@@ -204,7 +224,7 @@ class TerminalSessionService : Service() {
         val globalSessionList = mutableStateMapOf<String, SessionInfo>()
 
         fun start(context: Context) {
-            context.startForegroundService(Intent(context, TerminalSessionService::class.java))
+            context.startService(Intent(context, TerminalSessionService::class.java))
         }
     }
 }

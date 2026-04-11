@@ -32,6 +32,7 @@ data class ContainerInfo(
     val disableIPv6: Boolean = false,
     val enableAndroidStorage: Boolean = false,
     val enableHwAccess: Boolean = false,
+    val enableGpuMode: Boolean = false,
     val enableTermuxX11: Boolean = false,
     val selinuxPermissive: Boolean = false,
     val volatileMode: Boolean = false,
@@ -63,6 +64,7 @@ data class ContainerInfo(
         appendLine("disable_ipv6=${if (disableIPv6) "1" else "0"}")
         appendLine("enable_android_storage=${if (enableAndroidStorage) "1" else "0"}")
         appendLine("enable_hw_access=${if (enableHwAccess) "1" else "0"}")
+        appendLine("enable_gpu_mode=${if (enableGpuMode) "1" else "0"}")
         appendLine("enable_termux_x11=${if (enableTermuxX11) "1" else "0"}")
         appendLine("selinux_permissive=${if (selinuxPermissive) "1" else "0"}")
         appendLine("volatile_mode=${if (volatileMode) "1" else "0"}")
@@ -73,7 +75,7 @@ data class ContainerInfo(
             appendLine("upstream_interfaces=${upstreamInterfaces.joinToString(",")}")
         }
         if (netMode == "nat" && portForwards.isNotEmpty()) {
-            appendLine("port_forwards=${portForwards.joinToString(",") { 
+            appendLine("port_forwards=${portForwards.joinToString(",") {
                 val mapping = if (it.containerPort != null) "${it.hostPort}:${it.containerPort}" else it.hostPort
                 "$mapping/${it.proto}"
             }}")
@@ -260,6 +262,7 @@ object ContainerManager {
                 disableIPv6 = configMap["disable_ipv6"] == "1",
                 enableAndroidStorage = configMap["enable_android_storage"] == "1",
                 enableHwAccess = configMap["enable_hw_access"] == "1",
+                enableGpuMode = configMap["enable_gpu_mode"] == "1",
                 enableTermuxX11 = configMap["enable_termux_x11"] == "1",
                 selinuxPermissive = configMap["selinux_permissive"] == "1",
                 volatileMode = configMap["volatile_mode"] == "1",
@@ -320,7 +323,7 @@ object ContainerManager {
                 return@withContext Pair(true, pid)
             }
         } catch (e: Exception) {
-            // Ignore errors — treat as stopped
+            // Ignore errors - treat as stopped
         }
 
         Pair(false, null)
@@ -355,7 +358,7 @@ object ContainerManager {
      * List active upstream interfaces by scanning all routing tables.
      *
      * Uses `table all` instead of the default table so that CLAT/Qualcomm
-     * devices are correctly detected — on these devices every interface has
+     * devices are correctly detected - on these devices every interface has
      * its own per-interface routing table and nothing appears in the main
      * table, so `ip route show default` returns empty.
      */
