@@ -90,7 +90,7 @@ void print_usage(void) {
       "                            e.g. -B /data:/data,/tmp:/tmp\n"
       "      --reset               Reset config to defaults (keeps "
       "name/rootfs)\n"
-      "  --help                    Show this help message\n\n"
+      "      --help                Show this help message\n\n"
 
       C_BOLD "Examples:" C_RESET "\n"
       "  droidspaces --rootfs=/path/to/rootfs start\n"
