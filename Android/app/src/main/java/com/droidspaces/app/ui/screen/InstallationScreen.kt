@@ -72,6 +72,11 @@ fun InstallationScreen(
                 rebootRecommended = true
             }
 
+            // Capture symlink state before any module directory removal
+            val wasSymlinkEnabled = withContext(Dispatchers.IO) {
+                com.droidspaces.app.util.SymlinkInstaller.isSymlinkEnabled()
+            }
+
             if (!isAtomicUpdate) {
                 // Clean Slate: Remove the old module, but NEVER the bin directory
                 // (the daemon's g_self_path fix means the old binary stays valid
@@ -99,6 +104,12 @@ fun InstallationScreen(
                     }
                     moduleResult.fold(
                         onSuccess = {
+                            // Restore symlink if it was enabled before the update
+                            if (wasSymlinkEnabled) {
+                                withContext(Dispatchers.IO) {
+                                    com.droidspaces.app.util.SymlinkInstaller.enable()
+                                }
+                            }
                             isSuccess = true
                             isInstalling = false
                             isInstallingModule = false

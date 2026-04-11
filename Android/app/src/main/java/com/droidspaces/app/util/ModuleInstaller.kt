@@ -33,6 +33,9 @@ object ModuleInstaller {
             val tempDir = File(context.cacheDir, "boot-module-temp")
             val assetManager = context.assets
 
+            // Pre-check: Is the system binary symlink enabled?
+            val wasSymlinkEnabled = SymlinkInstaller.isSymlinkEnabled()
+
             // Step 1: Remove old module directory
             onProgress(ModuleInstallationStep.RemovingOldModule(MAGISK_MODULE_PATH))
             Shell.cmd("rm -rf '$MAGISK_MODULE_PATH' 2>&1").exec()
@@ -128,6 +131,11 @@ object ModuleInstaller {
                 return@withContext Result.failure(
                     Exception("droidspaces.te verification failed")
                 )
+            }
+
+            // Restore symlink if it was previously enabled
+            if (wasSymlinkEnabled) {
+                SymlinkInstaller.enable()
             }
 
             onProgress(ModuleInstallationStep.Success)
