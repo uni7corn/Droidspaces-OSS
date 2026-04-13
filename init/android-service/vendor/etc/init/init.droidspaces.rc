@@ -29,3 +29,9 @@ on post-fs-data
 
 on property:sys.boot_completed=1
     start droidspaces_autoboot
+
+# Uncomment this to auto-boot the device when the charger
+# is plugged in while the device is powered off
+#
+# on property:ro.bootmode=charger
+#    setprop sys.powerctl "reboot"
