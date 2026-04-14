@@ -984,6 +984,7 @@ int start_rootfs(struct ds_config *cfg) {
         struct ds_env_var *saved_vars = cfg->env_vars;
         int saved_count = cfg->env_var_count;
         int saved_cap = cfg->env_var_capacity;
+        int old_force_cgv1 = cfg->force_cgroupv1;
 
         struct ds_config reboot_cfg = *cfg;
         if (ds_config_load_by_name(cfg->container_name, &reboot_cfg) == 0) {
@@ -995,6 +996,12 @@ int start_rootfs(struct ds_config *cfg) {
             ds_get_dns_servers(reboot_cfg.dns_servers,
                                reboot_cfg.dns_server_content,
                                sizeof(reboot_cfg.dns_server_content));
+          }
+          /* Cgroup namespace is locked at monitor startup - can't change */
+          if (reboot_cfg.force_cgroupv1 != old_force_cgv1) {
+            printf("\n" C_BOLD C_YELLOW "force_cgroupv1 changed but "
+                   "requires a full stop/start to take effect" C_RESET "\n");
+            reboot_cfg.force_cgroupv1 = old_force_cgv1;
           }
           *cfg = reboot_cfg;
           /* Restore mount point for img-based containers */
