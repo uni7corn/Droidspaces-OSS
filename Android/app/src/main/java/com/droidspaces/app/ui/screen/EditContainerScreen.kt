@@ -44,6 +44,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import com.droidspaces.app.ui.component.SettingsRowCard
 import com.droidspaces.app.ui.component.EnvironmentVariablesDialog
 import com.droidspaces.app.util.PortForward
+import com.droidspaces.app.ui.component.PrivilegedModeDialog
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.lazy.LazyColumn
@@ -74,6 +75,7 @@ fun EditContainerScreen(
     var disableIPv6 by remember { mutableStateOf(container.disableIPv6) }
     var enableAndroidStorage by remember { mutableStateOf(container.enableAndroidStorage) }
     var enableHwAccess by remember { mutableStateOf(container.enableHwAccess) }
+    var enableGpuMode by remember { mutableStateOf(container.enableGpuMode) }
     var enableTermuxX11 by remember { mutableStateOf(container.enableTermuxX11) }
     var selinuxPermissive by remember { mutableStateOf(container.selinuxPermissive) }
     var volatileMode by remember { mutableStateOf(container.volatileMode) }
@@ -86,6 +88,7 @@ fun EditContainerScreen(
     var forceCgroupv1 by remember { mutableStateOf(container.forceCgroupv1) }
     var blockNestedNs by remember { mutableStateOf(container.blockNestedNs) }
     var staticNatIp by remember { mutableStateOf(container.staticNatIp) }
+    var privileged by remember { mutableStateOf(container.privileged) }
 
     // Track the "saved" baseline values - updated after each successful save
     var savedHostname by remember { mutableStateOf(container.hostname) }
@@ -93,6 +96,7 @@ fun EditContainerScreen(
     var savedDisableIPv6 by remember { mutableStateOf(container.disableIPv6) }
     var savedEnableAndroidStorage by remember { mutableStateOf(container.enableAndroidStorage) }
     var savedEnableHwAccess by remember { mutableStateOf(container.enableHwAccess) }
+    var savedEnableGpuMode by remember { mutableStateOf(container.enableGpuMode) }
     var savedEnableTermuxX11 by remember { mutableStateOf(container.enableTermuxX11) }
     var savedSelinuxPermissive by remember { mutableStateOf(container.selinuxPermissive) }
     var savedVolatileMode by remember { mutableStateOf(container.volatileMode) }
@@ -105,6 +109,7 @@ fun EditContainerScreen(
     var savedForceCgroupv1 by remember { mutableStateOf(container.forceCgroupv1) }
     var savedBlockNestedNs by remember { mutableStateOf(container.blockNestedNs) }
     var savedStaticNatIp by remember { mutableStateOf(container.staticNatIp) }
+    var savedPrivileged by remember { mutableStateOf(container.privileged) }
 
     // Navigation and internal UI states
     var showFilePicker by remember { mutableStateOf(false) }
@@ -129,6 +134,7 @@ fun EditContainerScreen(
             disableIPv6 != savedDisableIPv6 ||
             enableAndroidStorage != savedEnableAndroidStorage ||
             enableHwAccess != savedEnableHwAccess ||
+            enableGpuMode != savedEnableGpuMode ||
             enableTermuxX11 != savedEnableTermuxX11 ||
             selinuxPermissive != savedSelinuxPermissive ||
             volatileMode != savedVolatileMode ||
@@ -140,7 +146,8 @@ fun EditContainerScreen(
             portForwards != savedPortForwards ||
             forceCgroupv1 != savedForceCgroupv1 ||
             blockNestedNs != savedBlockNestedNs ||
-            staticNatIp != savedStaticNatIp
+            staticNatIp != savedStaticNatIp ||
+            privileged != savedPrivileged
         }
     }
 
@@ -165,6 +172,7 @@ fun EditContainerScreen(
                     disableIPv6 = disableIPv6,
                     enableAndroidStorage = enableAndroidStorage,
                     enableHwAccess = enableHwAccess,
+                    enableGpuMode = enableGpuMode,
                     enableTermuxX11 = enableTermuxX11,
                     selinuxPermissive = selinuxPermissive,
                     volatileMode = volatileMode,
@@ -176,7 +184,8 @@ fun EditContainerScreen(
                     portForwards = portForwards,
                     forceCgroupv1 = forceCgroupv1,
                     blockNestedNs = blockNestedNs,
-                    staticNatIp = staticNatIp
+                    staticNatIp = staticNatIp,
+                    privileged = privileged
                 )
 
                 // Update config file
@@ -192,6 +201,7 @@ fun EditContainerScreen(
                         savedDisableIPv6 = disableIPv6
                         savedEnableAndroidStorage = enableAndroidStorage
                         savedEnableHwAccess = enableHwAccess
+                        savedEnableGpuMode = enableGpuMode
                         savedEnableTermuxX11 = enableTermuxX11
                         savedSelinuxPermissive = selinuxPermissive
                         savedVolatileMode = volatileMode
@@ -204,6 +214,7 @@ fun EditContainerScreen(
                         savedForceCgroupv1 = forceCgroupv1
                         savedBlockNestedNs = blockNestedNs
                         savedStaticNatIp = staticNatIp
+                        savedPrivileged = privileged
 
                         // Refresh container list and SELinux status using ViewModel
                         containerViewModel.refresh()
@@ -273,6 +284,18 @@ fun EditContainerScreen(
     }
 
     var showEnvDialog by remember { mutableStateOf(false) }
+    var showPrivilegedDialog by remember { mutableStateOf(false) }
+
+    if (showPrivilegedDialog) {
+        PrivilegedModeDialog(
+            initialPrivileged = privileged,
+            onConfirm = { tags ->
+                privileged = tags
+                showPrivilegedDialog = false
+            },
+            onDismiss = { showPrivilegedDialog = false }
+        )
+    }
 
     if (showEnvDialog) {
         EnvironmentVariablesDialog(
@@ -421,7 +444,7 @@ fun EditContainerScreen(
             OutlinedTextField(
                 value = hostname,
                 onValueChange = { hostname = it },
-                label = { Text(context.getString(R.string.hostname_label_edit)) },
+                label = { Text(context.getString(R.string.hostname)) },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
                 leadingIcon = {
@@ -612,7 +635,7 @@ fun EditContainerScreen(
                         fontWeight = FontWeight.Bold,
                         color = if (!isUpstreamValid) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
                     )
-                    
+
                     if (!isUpstreamValid) {
                         Text(
                             text = context.getString(R.string.upstream_interfaces_required_error),
@@ -714,7 +737,7 @@ fun EditContainerScreen(
 
                                     if (availableUpstreams.isNotEmpty()) {
                                         Text(context.getString(R.string.available_system_interfaces), style = MaterialTheme.typography.labelMedium)
-                                        
+
                                         Box(
                                             modifier = Modifier
                                                 .fillMaxWidth()
@@ -746,7 +769,7 @@ fun EditContainerScreen(
                                             }
                                         }
                                     }
-                                    
+
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(context.getString(R.string.enter_manually), style = MaterialTheme.typography.labelMedium)
                                     OutlinedTextField(
@@ -858,7 +881,7 @@ fun EditContainerScreen(
 
                         val hostError = validatePortSpec(hostPort)
                         val containerError = validatePortSpec(containerPort)
-                        
+
                         var widthError: String? = null
                         if (hostError == null && containerError == null && hostPort.isNotBlank() && containerPort.isNotBlank()) {
                             if (getWidth(hostPort) != getWidth(containerPort)) {
@@ -914,7 +937,7 @@ fun EditContainerScreen(
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
-                                    
+
                                     Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -940,7 +963,7 @@ fun EditContainerScreen(
                                                 supportingText = { Text(hostError ?: widthError ?: overlapError ?: "") },
                                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text)
                                             )
-                                            
+
                                             OutlinedTextField(
                                                 value = containerPort,
                                                 onValueChange = { if (it.isEmpty() || it.all { c -> c.isDigit() || c == '-' }) containerPort = it },
@@ -952,7 +975,7 @@ fun EditContainerScreen(
                                                 supportingText = { Text(containerError ?: widthError ?: overlapError ?: context.getString(R.string.optional_symmetric_hint)) },
                                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text)
                                             )
-                                            
+
                                             ExposedDropdownMenuBox(
                                                 expanded = protoExpanded,
                                                 onExpandedChange = { protoExpanded = !protoExpanded }
@@ -1089,6 +1112,20 @@ fun EditContainerScreen(
             )
 
             ToggleCard(
+                icon = Icons.Default.Memory,
+                title = context.getString(R.string.gpu_access),
+                description = context.getString(R.string.gpu_access_description),
+                checked = if (enableHwAccess) true else enableGpuMode,
+                onCheckedChange = {
+                    if (!enableHwAccess) {
+                        clearFocus()
+                        enableGpuMode = it
+                    }
+                },
+                enabled = !enableHwAccess
+            )
+
+            ToggleCard(
                 painter = androidx.compose.ui.res.painterResource(R.drawable.ic_x11),
                 title = context.getString(R.string.termux_x11),
                 description = context.getString(R.string.termux_x11_description),
@@ -1137,14 +1174,31 @@ fun EditContainerScreen(
                 }
             )
 
+            val isSeccompDisabled = privileged.contains("noseccomp") || privileged.contains("full")
+            LaunchedEffect(isSeccompDisabled) {
+                if (isSeccompDisabled) blockNestedNs = false
+            }
+
             ToggleCard(
                 icon = Icons.Default.GppBad,
                 title = context.getString(R.string.manual_deadlock_shield),
                 description = context.getString(R.string.manual_deadlock_shield_description),
-                checked = blockNestedNs,
+                checked = if (isSeccompDisabled) false else blockNestedNs,
                 onCheckedChange = {
                     clearFocus()
                     blockNestedNs = it
+                },
+                enabled = !isSeccompDisabled
+            )
+
+            SettingsRowCard(
+                title = context.getString(R.string.privileged_mode),
+                subtitle = if (privileged.isEmpty()) context.getString(R.string.not_configured) else privileged,
+                description = context.getString(R.string.privileged_mode_description),
+                icon = Icons.Default.GppMaybe,
+                onClick = {
+                    clearFocus()
+                    showPrivilegedDialog = true
                 }
             )
 
@@ -1189,6 +1243,7 @@ fun EditContainerScreen(
                     showEnvDialog = true
                 }
             )
+
 
             // Bind Mounts Section
             Row(

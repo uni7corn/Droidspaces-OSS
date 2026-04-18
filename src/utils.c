@@ -1,5 +1,5 @@
 /*
- * Droidspaces v5 — High-performance Container Runtime
+ * Droidspaces v5 - High-performance Container Runtime
  *
  * Copyright (C) 2026 ravindu644 <droidcasts@protonmail.com>
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -30,45 +30,249 @@ void sanitize_container_name(const char *name, char *out, size_t size) {
   out[i] = '\0';
 }
 
-int is_subpath(const char *parent, const char *child) {
-  char real_parent[PATH_MAX], real_child[PATH_MAX];
+/* ---------------------------------------------------------------------------
+ * Relative-path resolution
+ *
+ * The daemon calls chdir("/") inside daemonize(), so any relative path
+ * captured from the user's CWD must be made absolute BEFORE we reach the
+ * daemonize()/reexec() boundary.  ds_resolve_argv_paths() is called once
+ * in main() while CWD is still the user's directory.
+ *
+ * Strategy:
+ *   1. Try realpath(3) - handles .., symlinks, and canonicalises the path.
+ *      This works for paths that already exist on disk.
+ *   2. For paths that do not exist yet (e.g. a new rootfs image being
+ *      created), fall back to a plain cwd-join.  We still strip leading ./
+ *      sequences so the result is always absolute.
+ * ---------------------------------------------------------------------------*/
 
-  if (!realpath(parent, real_parent)) {
-    return 0;
-  }
+char *ds_resolve_path_arg(const char *path) {
+  if (!path || !*path)
+    return strdup("");
 
-  /* We use a temporary buffer for child path manipulation */
-  char child_copy[PATH_MAX];
-  safe_strncpy(child_copy, child, sizeof(child_copy));
+  const char *p = path;
+  char *to_free = NULL;
 
-  if (!realpath(child_copy, real_child)) {
-    /* If child doesn't exist yet, we can't realpath it.
-     * But for bind mounts, tgt usually exists or is about to be created.
-     * We'll check the parent of the child instead. */
-    char *slash = strrchr(child_copy, '/');
-    if (slash) {
-      if (slash == child_copy) {
-        /* Child is in the root directory */
-        safe_strncpy(child_copy, "/", sizeof(child_copy));
-      } else {
-        *slash = '\0';
+  /* Handle ~/ expansion */
+  if (p[0] == '~' && (p[1] == '/' || p[1] == '\0')) {
+    const char *home = getenv("HOME");
+    if (home) {
+      size_t hlen = strlen(home);
+      size_t plen = strlen(p + 1);
+      to_free = malloc(hlen + plen + 1);
+      if (to_free) {
+        memcpy(to_free, home, hlen);
+        memcpy(to_free + hlen, p + 1, plen + 1);
+        p = to_free;
       }
-
-      if (!realpath(child_copy, real_child))
-        return 0;
-    } else {
-      /* Relative path with no slashes, check current directory */
-      if (!realpath(".", real_child))
-        return 0;
     }
   }
 
+  if (p[0] == '/') {
+    char *res = strdup(p);
+    free(to_free);
+    return res;
+  }
+
+  /* Fast path: realpath handles .., symlinks, and validates existence. */
+  char resolved[PATH_MAX];
+  if (realpath(p, resolved)) {
+    free(to_free);
+    return strdup(resolved);
+  }
+
+  /* Path does not exist yet - build an absolute path from the current CWD.
+   * Strip leading ./ noise before joining so the result stays clean. */
+  const char *suffix = p;
+  while (suffix[0] == '.' && suffix[1] == '/')
+    suffix += 2;
+  if (!*suffix) {
+    /* Input was pure "./" - resolve to CWD itself. */
+    char cwd[PATH_MAX];
+    char *res = strdup(getcwd(cwd, sizeof(cwd)) ? cwd : ".");
+    free(to_free);
+    return res;
+  }
+
+  char cwd[PATH_MAX];
+  if (!getcwd(cwd, sizeof(cwd))) {
+    char *res = strdup(p);
+    free(to_free);
+    return res;
+  }
+
+  size_t clen = strlen(cwd), plen = strlen(suffix);
+  if (clen + 1 + plen >= PATH_MAX) {
+    char *res = strdup(p);
+    free(to_free);
+    return res;
+  }
+
+  char *out = malloc(clen + 1 + plen + 1);
+  if (!out) {
+    char *res = strdup(p);
+    free(to_free);
+    return res;
+  }
+  memcpy(out, cwd, clen);
+  out[clen] = '/';
+  memcpy(out + clen + 1, suffix, plen + 1); /* copies the NUL terminator */
+  free(to_free);
+  return out;
+}
+
+/*
+ * Resolve every SRC component of a --bind-mount / -B value string.
+ * Format: SRC:DEST[,SRC:DEST,...]
+ * Only the SRC part of each pair is a host-side path; DEST lives inside the
+ * container namespace and is always absolute by convention.
+ */
+static char *resolve_bind_src(const char *val) {
+  /* Worst case: every token expands to PATH_MAX, times DS_MAX_BIND_MOUNTS.
+   * Use the heap - not the stack - to avoid blowing the stack in the daemon
+   * handler process (which may have a smaller stack than main). */
+  size_t bufsz = strlen(val) + PATH_MAX * 16 + 1;
+  char *copy = malloc(bufsz);
+  char *out = malloc(bufsz);
+  if (!copy || !out) {
+    free(copy);
+    free(out);
+    return strdup(val);
+  }
+  memcpy(copy, val, strlen(val) + 1);
+  out[0] = '\0';
+
+  char *sv, *tok = strtok_r(copy, ",", &sv);
+  int first = 1;
+  size_t off = 0;
+
+  while (tok) {
+    char *col = strchr(tok, ':');
+    const char *dest = col ? col + 1 : "";
+    if (col)
+      *col = '\0';
+
+    char *abs_src = ds_resolve_path_arg(tok);
+    const char *src = abs_src ? abs_src : tok;
+
+    int n = snprintf(out + off, bufsz - off, "%s%s%s%s", first ? "" : ",", src,
+                     col ? ":" : "", dest);
+    if (n > 0)
+      off += (size_t)n;
+    free(abs_src);
+    first = 0;
+    tok = strtok_r(NULL, ",", &sv);
+  }
+
+  free(copy);
+  char *result = strdup(out);
+  free(out);
+  return result;
+}
+
+/*
+ * Table of options whose next argument (or = suffix) is a filesystem path.
+ * Keeps ds_resolve_argv_paths() free of hard-coded option names.
+ */
+static const struct {
+  const char *opt;
+  int is_bind; /* 1 = --bind-mount: resolve the SRC component only */
+} ds_path_opts[] = {
+    {"--rootfs", 0}, {"-r", 0},           {"--rootfs-img", 0}, {"-i", 0},
+    {"--conf", 0},   {"--config", 0},     {"-C", 0},           {"--env", 0},
+    {"-E", 0},       {"--bind-mount", 1}, {"--bind", 1},       {"-B", 1},
+    {NULL, 0},
+};
+
+void ds_resolve_argv_paths(int argc, char **argv) {
+  for (int i = 0; i < argc; i++) {
+    const char *arg = argv[i];
+    if (!arg || arg[0] != '-') /* fast skip: non-option args are not paths */
+      continue;
+
+    for (int j = 0; ds_path_opts[j].opt; j++) {
+      const char *opt = ds_path_opts[j].opt;
+      int bind = ds_path_opts[j].is_bind;
+      size_t olen = strlen(opt);
+
+      /* "--opt=VALUE" form */
+      if (strncmp(arg, opt, olen) == 0 && arg[olen] == '=') {
+        const char *val = arg + olen + 1;
+        if (!*val || (val[0] == '/' && !bind))
+          break; /* absolute paths (non-bind) don't need resolution */
+        char *resolved =
+            bind ? resolve_bind_src(val) : ds_resolve_path_arg(val);
+        if (resolved) {
+          char *new_arg = malloc(olen + 1 + strlen(resolved) + 1);
+          if (new_arg) {
+            memcpy(new_arg, opt, olen);
+            new_arg[olen] = '=';
+            strcpy(new_arg + olen + 1, resolved);
+            argv[i] = new_arg; /* argv[i] was a kernel-provided pointer; safe to
+                                  replace */
+          }
+          free(resolved);
+        }
+        break;
+      }
+
+      /* "--opt VALUE" form (value is the next element) */
+      if (strcmp(arg, opt) == 0 && i + 1 < argc) {
+        const char *val = argv[i + 1];
+        if (!val || !*val || (val[0] == '/' && !bind))
+          continue;
+        char *resolved =
+            bind ? resolve_bind_src(val) : ds_resolve_path_arg(val);
+        if (resolved)
+          argv[i + 1] = resolved; /* kernel-provided string; safe to replace */
+        break;
+      }
+    }
+  }
+}
+
+#ifndef RAMFS_MAGIC
+#define RAMFS_MAGIC 0x858458f6
+#endif
+#ifndef TMPFS_MAGIC
+#define TMPFS_MAGIC 0x01021994
+#endif
+
+int is_ramfs(const char *path) {
+  struct statfs sfs;
+  if (statfs(path, &sfs) < 0)
+    return 0;
+  return (sfs.f_type == RAMFS_MAGIC || sfs.f_type == TMPFS_MAGIC);
+}
+
+int is_subpath(const char *parent, const char *child) {
+  char *real_parent = ds_resolve_path_arg(parent);
+  char *real_child = ds_resolve_path_arg(child);
+
+  if (!real_parent || !real_child || !real_parent[0] || !real_child[0]) {
+    free(real_parent);
+    free(real_child);
+    return 0;
+  }
+
   size_t len = strlen(real_parent);
+
+  /* Special case for the root directory */
+  if (len == 1 && real_parent[0] == '/') {
+    free(real_parent);
+    free(real_child);
+    return 1;
+  }
+
+  int result = 0;
   if (strncmp(real_parent, real_child, len) == 0) {
     if (real_child[len] == '\0' || real_child[len] == '/')
-      return 1;
+      result = 1;
   }
-  return 0;
+
+  free(real_parent);
+  free(real_child);
+  return result;
 }
 
 int is_running_in_termux(void) {
@@ -146,7 +350,7 @@ int write_file_atomic(const char *path, const char *content) {
   if (write_file(tmp, content) < 0)
     return -1;
 
-  /* fsync before rename — ensures data hits disk on Android before reboot */
+  /* fsync before rename - ensures data hits disk on Android before reboot */
   int sync_fd = open(tmp, O_RDONLY | O_CLOEXEC);
   if (sync_fd >= 0) {
     fsync(sync_fd);
@@ -208,7 +412,7 @@ int read_file(const char *path, char *buf, size_t size) {
 }
 
 /* ---------------------------------------------------------------------------
- * UUID generation  — 32 hex chars from /dev/urandom
+ * UUID generation  - 32 hex chars from /dev/urandom
  * ---------------------------------------------------------------------------*/
 
 int generate_uuid(char *buf, size_t size) {
@@ -256,7 +460,7 @@ int generate_uuid(char *buf, size_t size) {
 }
 
 /* ---------------------------------------------------------------------------
- * PID collection — read numeric entries from /proc
+ * PID collection - read numeric entries from /proc
  * ---------------------------------------------------------------------------*/
 
 int collect_pids(pid_t **pids_out, size_t *count_out) {
@@ -765,8 +969,16 @@ void check_kernel_recommendation(void) {
             "some functions might be unstable.",
             major, minor, DS_RECOMMENDED_KERNEL_MAJOR,
             DS_RECOMMENDED_KERNEL_MINOR);
-    printf("\r\n");
     fflush(stdout);
+  }
+}
+
+void rotate_log(const char *path, size_t max_size) {
+  struct stat st;
+  if (stat(path, &st) == 0 && (size_t)st.st_size >= max_size) {
+    char old_path[PATH_MAX + 8];
+    snprintf(old_path, sizeof(old_path), "%s.old", path);
+    rename(path, old_path);
   }
 }
 
@@ -785,13 +997,7 @@ static void write_to_log_file(const char *name, const char *component,
   char log_path[PATH_MAX];
   snprintf(log_path, sizeof(log_path), "%.4090s/log", log_dir);
 
-  /* Rotate log to log.old if it exceeds 2MB */
-  struct stat st;
-  if (stat(log_path, &st) == 0 && st.st_size >= 2 * 1024 * 1024) {
-    char old_log_path[PATH_MAX + 8];
-    snprintf(old_log_path, sizeof(old_log_path), "%s.old", log_path);
-    rename(log_path, old_log_path);
-  }
+  rotate_log(log_path, 2 * 1024 * 1024);
 
   FILE *f = fopen(log_path, "ae"); /* append + close-on-exec */
   if (!f)
@@ -878,6 +1084,15 @@ void write_monitor_debug_log(const char *name, const char *fmt, ...) {
 void print_ds_banner(void) {
   printf(C_CYAN C_BOLD "— Welcome to " C_WHITE DS_PROJECT_NAME
                        " v" DS_VERSION C_CYAN " ! —" C_RESET "\r\n\r\n");
+  fflush(stdout);
+}
+
+void print_privileged_warning(int privileged_mask) {
+  if (privileged_mask <= 0)
+    return;
+
+  printf(C_BOLD C_RED "WARNING: PRIVILEGED MODE ACTIVE - DEVICE SECURITY "
+                      "COMPROMISED" C_RESET "\r\n\r\n");
   fflush(stdout);
 }
 
@@ -983,6 +1198,31 @@ int get_selinux_context(const char *path, char *buf, size_t size) {
   return 0;
 }
 
+int ds_get_selinux_status(void) {
+  char buf[16];
+  if (read_file("/sys/fs/selinux/enforce", buf, sizeof(buf)) < 0)
+    return -1;
+  return atoi(buf);
+}
+
+void ds_set_selinux_permissive(void) {
+  int status = ds_get_selinux_status();
+  if (status == -1) {
+    ds_warn("SELinux not supported or interface missing. Skipping permissive "
+            "mode.");
+    return;
+  }
+
+  if (status == 1) {
+    ds_log("Setting SELinux to permissive...");
+    if (write_file("/sys/fs/selinux/enforce", "0") < 0) {
+      /* Try setenforce command as fallback */
+      char *args[] = {"setenforce", "0", NULL};
+      run_command_quiet(args);
+    }
+  }
+}
+
 int set_selinux_context(const char *path, const char *context) {
   if (!path || !context)
     return -1;
@@ -1031,7 +1271,7 @@ int copy_file(const char *src, const char *dst) {
  * ticks since host boot), subtracts it from /proc/uptime, and prints
  * a human-readable uptime string.
  *
- * Works entirely from the host side — no namespace entry required.
+ * Works entirely from the host side - no namespace entry required.
  * If the container is not running, behaves like enter_rootfs and
  * run_in_rootfs: prints an error and returns -1.
  * ---------------------------------------------------------------------------*/
@@ -1058,7 +1298,7 @@ int show_container_uptime(struct ds_config *cfg) {
   }
 
   unsigned long long start_ticks = 0;
-  /* Skip the first 21 fields — field 22 is starttime in clock ticks
+  /* Skip the first 21 fields - field 22 is starttime in clock ticks
    * since host boot. */
   for (int i = 1; i <= 21; i++) {
     if (fscanf(f, "%*s") == EOF)

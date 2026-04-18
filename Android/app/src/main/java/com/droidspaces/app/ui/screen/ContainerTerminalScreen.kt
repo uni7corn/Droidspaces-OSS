@@ -68,7 +68,6 @@ fun ContainerTerminalScreen(
     var binder by remember { mutableStateOf<TerminalSessionService.SessionBinder?>(null) }
 
     DisposableEffect(Unit) {
-        TerminalSessionService.start(context)
         val conn = object : ServiceConnection {
             override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
                 binder = service as? TerminalSessionService.SessionBinder
@@ -109,7 +108,7 @@ fun ContainerTerminalScreen(
         }
     }
 
-    // Sync UI tabs with background service reality. 
+    // Sync UI tabs with background service reality.
     // If sessions are killed externally (e.g. Notification Exit), remove them here.
     LaunchedEffect(TerminalSessionService.globalSessionList.size) {
         val currentGlobalIds = TerminalSessionService.globalSessionList.keys
@@ -126,6 +125,7 @@ fun ContainerTerminalScreen(
     }
 
     fun addTab(user: String) {
+        TerminalSessionService.start(context)
         val id = "${containerName}_${UUID.randomUUID().toString().take(8)}"
         val newTab = TerminalTab(id = id, user = user, label = "$user@$hostname")
         val currentIndex = tabs.indexOfFirst { it.id == activeTabId }
@@ -140,7 +140,7 @@ fun ContainerTerminalScreen(
     fun closeTab(tab: TerminalTab) {
         // Send Ctrl+D (EOF) first so the in-container bash exits cleanly,
         // unwinding the full su → bash chain before we SIGKILL the sh wrapper.
-        // Without this, finishIfRunning() only kills the outer sh process —
+        // Without this, finishIfRunning() only kills the outer sh process -
         // su and bash survive in their own setsid() session, showing up as
         // zombie sessions in `systemctl status`.
         binder?.getSession(tab.id)?.write("\u0004")

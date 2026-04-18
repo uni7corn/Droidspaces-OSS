@@ -34,7 +34,10 @@ class ContainerInstallationViewModel : ViewModel() {
 
     var enableHwAccess: Boolean by mutableStateOf(false)
         private set
-    
+
+    var enableGpuMode: Boolean by mutableStateOf(false)
+        private set
+
     var enableTermuxX11: Boolean by mutableStateOf(false)
         private set
 
@@ -46,7 +49,7 @@ class ContainerInstallationViewModel : ViewModel() {
 
     var bindMounts: List<BindMount> by mutableStateOf(emptyList())
         private set
-    
+
     var dnsServers: String by mutableStateOf("")
         private set
 
@@ -74,6 +77,9 @@ class ContainerInstallationViewModel : ViewModel() {
     var blockNestedNs: Boolean by mutableStateOf(false)
         private set
 
+    var privileged: String by mutableStateOf("")
+        private set
+
     fun setTarball(uri: Uri) {
         tarballUri = uri
     }
@@ -93,6 +99,7 @@ class ContainerInstallationViewModel : ViewModel() {
         disableIPv6: Boolean,
         enableAndroidStorage: Boolean,
         enableHwAccess: Boolean,
+        enableGpuMode: Boolean,
         enableTermuxX11: Boolean,
         selinuxPermissive: Boolean,
         volatileMode: Boolean,
@@ -103,12 +110,14 @@ class ContainerInstallationViewModel : ViewModel() {
         upstreamInterfaces: List<String>,
         portForwards: List<PortForward>,
         forceCgroupv1: Boolean,
-        blockNestedNs: Boolean
+        blockNestedNs: Boolean,
+        privileged: String
     ) {
         this.netMode = netMode
         this.disableIPv6 = disableIPv6
         this.enableAndroidStorage = enableAndroidStorage
         this.enableHwAccess = enableHwAccess
+        this.enableGpuMode = enableGpuMode
         this.enableTermuxX11 = enableTermuxX11
         this.selinuxPermissive = selinuxPermissive
         this.volatileMode = volatileMode
@@ -120,6 +129,7 @@ class ContainerInstallationViewModel : ViewModel() {
         this.portForwards = portForwards
         this.forceCgroupv1 = forceCgroupv1
         this.blockNestedNs = blockNestedNs
+        this.privileged = privileged
     }
 
     fun buildConfig(): ContainerInfo? {
@@ -138,6 +148,7 @@ class ContainerInstallationViewModel : ViewModel() {
             disableIPv6 = disableIPv6,
             enableAndroidStorage = enableAndroidStorage,
             enableHwAccess = enableHwAccess,
+            enableGpuMode = enableGpuMode,
             enableTermuxX11 = enableTermuxX11,
             selinuxPermissive = selinuxPermissive,
             volatileMode = volatileMode,
@@ -151,7 +162,8 @@ class ContainerInstallationViewModel : ViewModel() {
             upstreamInterfaces = upstreamInterfaces,
             portForwards = portForwards,
             forceCgroupv1 = forceCgroupv1,
-            blockNestedNs = blockNestedNs
+            blockNestedNs = blockNestedNs,
+            privileged = privileged
         )
     }
 
@@ -163,6 +175,7 @@ class ContainerInstallationViewModel : ViewModel() {
         disableIPv6 = false
         enableAndroidStorage = false
         enableHwAccess = false
+        enableGpuMode = false
         enableTermuxX11 = false
         selinuxPermissive = false
         volatileMode = false
@@ -176,6 +189,7 @@ class ContainerInstallationViewModel : ViewModel() {
         portForwards = emptyList()
         forceCgroupv1 = false
         blockNestedNs = false
+        privileged = ""
     }
 }
 

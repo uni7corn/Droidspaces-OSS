@@ -11,6 +11,7 @@ Common issues, their causes, and how to fix them.
 - [Systemd Hangs on Older Kernels](#systemd-hangs-on-older-kernels)
 - [Container Won't Stop](#container-wont-stop)
 - [Rootfs Image I/O Errors on Android](#rootfs-image-io-errors-on-android)
+- [Networking is completely dead - ping fails with "socket: permission denied"](#paranoid-networking)
 - [DNS / Name Resolution Issues](#dns--name-resolution-issues)
 - [WiFi/Mobile Data Disconnects](#wifimobile-data-disconnects)
 - [NAT Mode: No Internet / IPv6-Only Upstream](#ipv4-quirks)
@@ -154,6 +155,31 @@ chcon u:object_r:vold_data_file:s0 /path/to/rootfs.img
 
 ---
 
+<a id="paranoid-networking"></a>
+
+## Networking is completely dead - ping fails with "socket: permission denied"
+
+**Symptoms:** You have no internet access inside the container. Even basic commands like `ping` fail immediately with a `socket: permission denied` error, even when running as root.
+
+**Cause:** This is caused by **Android Paranoid Networking**, a security feature found in many Android kernels (especially version 4.14 and older). Unlike standard Linux, the Android kernel restricts network socket creation to specific supplementary Group IDs (GIDs). Without these specific IDs, the kernel's security hooks block the process:
+
+* **AID_INET (3003):** Required to create any AF_INET/AF_INET6 socket. Without this, `connect()` and `bind()` calls fail.
+* **AID_NET_RAW (3004):** Required for `ping` and other raw networking tasks.
+* **AID_NET_ADMIN (3005):** Required for network configuration and routing tasks.
+
+**Solutions:**
+
+- **Kernel Level Fix:** If you are building your own kernel, the most effective solution is to disable this restriction entirely in your kernel configuration:
+  ```bash
+  CONFIG_ANDROID_PARANOID_NETWORK=n
+  ```
+
+- **Userland Fix:** Use a rootfs that has been specifically patched to include these Android-specific GIDs in the group database. Our official rootfs tarballs come pre-configured to handle these permission requirements:
+
+   [Droidspaces-rootfs-builder Releases](https://github.com/ravindu644/Droidspaces-rootfs-builder/releases/latest)
+
+---
+
 ## DNS / Name Resolution Issues
 
 **Symptoms:** Internet works (you can ping IPs), but domain names fail to resolve, even though `/etc/resolv.conf` has the correct DNS nameservers. This issue happens especially with Mobile Data, but can also occur on Wi-Fi with some ISPs.
@@ -206,7 +232,7 @@ chcon u:object_r:vold_data_file:s0 /path/to/rootfs.img
 
 **Cause:** On Android, the `/data/local/Droidspaces/Containers` directory often receives a generic SELinux context. This causes the kernel to block or silently interfere with advanced filesystem operations (like creating certain symlinks or special files) when running in **Directory-based mode** (`--rootfs=/path/to/dir`). Because every file and symlink inside the directory tree is exposed directly to the host filesystem, Android's SELinux policy can relabel or restrict individual entries, corrupting the internal Linux filesystem's expected layout.
 
-**Recommended Solution:** Move to **rootfs.img mode** (`--rootfs-img=/path/to/rootfs.img`).  
+**Recommended Solution:** Move to **rootfs.img mode** (`--rootfs-img=/path/to/rootfs.img`).
 
 In this mode, the rootfs is stored as a standalone ext4 image and loop-mounted at runtime. SELinux xattr labels for files inside the image are encapsulated within the image's own filesystem metadata, so Android's policy engine cannot relabel or conflict with them. This avoids the core problem of the host assigning a generic context to every file in the directory tree.
 
@@ -253,43 +279,6 @@ In this mode, the rootfs is stored as a standalone ext4 image and loop-mounted a
 
 ---
 
-## GPU Permission Denied in Container
-
-**Symptoms:** `glxgears`, `vulkaninfo`, or other GPU applications fail with "Permission denied" when accessing `/dev/dri/*`, `/dev/mali*`, or `/dev/kgsl-3d0`.
-
-**Cause:** The container's root user is not a member of the GPU device's group.
-
-**Solution:**
-
-With `--hw-access` enabled, Droidspaces **automatically** creates GPU groups and adds root. If you still see errors:
-
-1. **Verify GPU groups were created:**
-   ```bash
-   droidspaces --name=mycontainer enter
-   cat /etc/group | grep gpu_
-   ```
-   You should see entries like `gpu_44:x:44:root`.
-
-2. **Check device permissions:**
-   ```bash
-   ls -la /dev/dri/ /dev/kgsl-3d0 /dev/mali0 2>/dev/null
-   ```
-   Note the group ownership GID.
-
-3. **Manual fallback (if auto-detection missed a device):**
-   ```bash
-   groupadd -g <GID> gpu_custom
-   usermod -aG gpu_custom root
-   ```
-
-4. **X11 not working:**
-   - Verify Termux X11 is running: `termux-x11 :0 &` (in Termux, outside container)
-   - **Enable X11 Support**: Ensure either `--hw-access` or the dedicated `--termux-x11` flag is used.
-   - Set `export DISPLAY=:0` inside the container
-   - Check socket exists: `ls -la /tmp/.X11-unix/`
-
----
-
 <a id="ipv4-quirks"></a>
 ## NAT Mode: No Internet / IPv6-Only Upstream
 
@@ -297,8 +286,8 @@ With `--hw-access` enabled, Droidspaces **automatically** creates GPU groups and
 
 **Cause**: Droidspaces NAT mode currently supports **IPv4 only**. If your upstream interface (e.g., `rmnet_data0`) does not have an assigned IPv4 address (common with certain ISPs that use IPv6-only APNs/networks), NAT will fail. Additionally, some mobile data interfaces may change names (e.g., `rmnet_data0` vs `rmnet_data1`) upon reconnection.
 
-**Tip: Using Wildcards**  
-To handle unpredictable interface names on mobile data, you can use wildcards in your `--upstream` configuration (e.g., `--upstream "rmnet_data*,wlan0"`). Droidspaces will automatically monitor and match any active interface that fits the pattern - in real time.
+> [!TIP]
+> **Using Wildcards:** To handle unpredictable interface names on mobile data, you can use wildcards in your `--upstream` configuration (e.g., `--upstream "rmnet_data*,wlan0"`). Droidspaces will automatically monitor and match any active interface that fits the pattern - in real time.
 
 ---
 

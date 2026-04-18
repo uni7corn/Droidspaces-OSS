@@ -32,7 +32,6 @@ import com.droidspaces.app.ui.screen.InstallationSummaryScreen
 import com.droidspaces.app.ui.screen.InstallationProgressScreen
 import com.droidspaces.app.ui.screen.EditContainerScreen
 import com.droidspaces.app.ui.screen.ContainerDetailsScreen
-import com.droidspaces.app.ui.screen.ProcessListScreen
 import com.droidspaces.app.ui.screen.SystemdScreen
 import com.droidspaces.app.ui.screen.ContainerTerminalScreen
 import com.droidspaces.app.ui.viewmodel.ContainerInstallationViewModel
@@ -46,6 +45,7 @@ import androidx.compose.ui.Modifier
 import com.droidspaces.app.ui.util.LoadingIndicator
 import com.droidspaces.app.ui.util.LoadingSize
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.droidspaces.app.ui.viewmodel.AppStateViewModel
 import androidx.activity.ComponentActivity
 import android.net.Uri
 import androidx.navigation.NavType
@@ -86,9 +86,6 @@ sealed class Screen(val route: String) {
     data object ContainerDetails : Screen("container_details/{containerName}") {
         fun createRoute(containerName: String) = "container_details/${Uri.encode(containerName)}"
     }
-    data object ProcessList : Screen("process_list/{containerName}") {
-        fun createRoute(containerName: String) = "process_list/${Uri.encode(containerName)}"
-    }
     data object Systemd : Screen("systemd/{containerName}") {
         fun createRoute(containerName: String) = "systemd/${Uri.encode(containerName)}"
     }
@@ -106,9 +103,15 @@ fun DroidspacesNavigation(
     val context = LocalContext.current
     val prefsManager = remember { PreferencesManager.getInstance(context) }
 
-    // Shared ViewModel scoped to Activity to ensure state consistency across screens
+    // Shared ViewModels scoped to Activity to ensure state consistency across screens
     val activity = context as? ComponentActivity
     val sharedContainerViewModel: ContainerViewModel = if (activity != null) {
+        viewModel(viewModelStoreOwner = activity)
+    } else {
+        viewModel()
+    }
+
+    val sharedAppStateViewModel: AppStateViewModel = if (activity != null) {
         viewModel(viewModelStoreOwner = activity)
     } else {
         viewModel()
@@ -192,6 +195,7 @@ fun DroidspacesNavigation(
             exitTransition = setupExitTransition
         ) {
             InstallationScreen(
+                appStateViewModel = sharedAppStateViewModel,
                 onInstallationComplete = {
                     prefsManager.isSetupCompleted = true
 
@@ -293,6 +297,8 @@ fun DroidspacesNavigation(
                 initialDisableIPv6 = viewModel.disableIPv6,
                 initialEnableAndroidStorage = viewModel.enableAndroidStorage,
                 initialEnableHwAccess = viewModel.enableHwAccess,
+                initialEnableGpuMode = viewModel.enableGpuMode,
+                initialEnableTermuxX11 = viewModel.enableTermuxX11,
                 initialSelinuxPermissive = viewModel.selinuxPermissive,
                 initialVolatileMode = viewModel.volatileMode,
                 initialBindMounts = viewModel.bindMounts,
@@ -300,11 +306,12 @@ fun DroidspacesNavigation(
                 initialRunAtBoot = viewModel.runAtBoot,
                 initialForceCgroupv1 = viewModel.forceCgroupv1,
                 initialBlockNestedNs = viewModel.blockNestedNs,
+                initialPrivileged = viewModel.privileged,
                 initialEnvFileContent = viewModel.envFileContent ?: "",
                 initialUpstreamInterfaces = viewModel.upstreamInterfaces,
                 initialPortForwards = viewModel.portForwards,
-                onNext = { netMode, disableIPv6, enableAndroidStorage, enableHwAccess, enableTermuxX11, selinuxPermissive, volatileMode, bindMounts, dnsServers, runAtBoot, forceCgroupv1, blockNestedNs, envFileContent, upstreamInterfaces, portForwards ->
-                    viewModel.setConfig(netMode, disableIPv6, enableAndroidStorage, enableHwAccess, enableTermuxX11, selinuxPermissive, volatileMode, bindMounts, dnsServers, runAtBoot, envFileContent, upstreamInterfaces, portForwards, forceCgroupv1, blockNestedNs)
+                onNext = { netMode, disableIPv6, enableAndroidStorage, enableHwAccess, enableGpuMode, enableTermuxX11, selinuxPermissive, volatileMode, bindMounts, dnsServers, runAtBoot, forceCgroupv1, blockNestedNs, privileged, envFileContent, upstreamInterfaces, portForwards ->
+                    viewModel.setConfig(netMode, disableIPv6, enableAndroidStorage, enableHwAccess, enableGpuMode, enableTermuxX11, selinuxPermissive, volatileMode, bindMounts, dnsServers, runAtBoot, envFileContent, upstreamInterfaces, portForwards, forceCgroupv1, blockNestedNs, privileged)
                     navController.navigate(Screen.SparseImageConfig.route)
                 },
                 onBack = {
@@ -532,21 +539,6 @@ fun DroidspacesNavigation(
             } ?: LaunchedEffect(Unit) {
                 navController.popBackStack()
             }
-        }
-
-        composable(
-            route = Screen.ProcessList.route,
-            arguments = listOf(
-                navArgument("containerName") { type = NavType.StringType }
-            ),
-            enterTransition = defaultEnterTransition,
-            exitTransition = defaultExitTransition
-        ) { backStackEntry ->
-            val containerName = backStackEntry.arguments?.getString("containerName") ?: ""
-            ProcessListScreen(
-                containerName = containerName,
-                onNavigateBack = { navController.popBackStack() }
-            )
         }
 
         composable(

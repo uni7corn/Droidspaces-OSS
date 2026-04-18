@@ -24,6 +24,7 @@ import kotlinx.coroutines.launch
 import com.droidspaces.app.ui.component.FilePickerDialog
 import com.droidspaces.app.ui.component.SettingsRowCard
 import com.droidspaces.app.ui.component.EnvironmentVariablesDialog
+import com.droidspaces.app.ui.component.PrivilegedModeDialog
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.lazy.LazyColumn
@@ -45,6 +46,7 @@ fun ContainerConfigScreen(
     initialDisableIPv6: Boolean = false,
     initialEnableAndroidStorage: Boolean = false,
     initialEnableHwAccess: Boolean = false,
+    initialEnableGpuMode: Boolean = false,
     initialEnableTermuxX11: Boolean = false,
     initialSelinuxPermissive: Boolean = false,
     initialVolatileMode: Boolean = false,
@@ -53,6 +55,7 @@ fun ContainerConfigScreen(
     initialRunAtBoot: Boolean = false,
     initialForceCgroupv1: Boolean = false,
     initialBlockNestedNs: Boolean = false,
+    initialPrivileged: String = "",
     initialEnvFileContent: String = "",
     initialUpstreamInterfaces: List<String> = emptyList(),
     initialPortForwards: List<PortForward> = emptyList(),
@@ -61,6 +64,7 @@ fun ContainerConfigScreen(
         disableIPv6: Boolean,
         enableAndroidStorage: Boolean,
         enableHwAccess: Boolean,
+        enableGpuMode: Boolean,
         enableTermuxX11: Boolean,
         selinuxPermissive: Boolean,
         volatileMode: Boolean,
@@ -69,6 +73,7 @@ fun ContainerConfigScreen(
         runAtBoot: Boolean,
         forceCgroupv1: Boolean,
         blockNestedNs: Boolean,
+        privileged: String,
         envFileContent: String?,
         upstreamInterfaces: List<String>,
         portForwards: List<PortForward>
@@ -79,6 +84,7 @@ fun ContainerConfigScreen(
     var disableIPv6 by remember { mutableStateOf(initialDisableIPv6) }
     var enableAndroidStorage by remember { mutableStateOf(initialEnableAndroidStorage) }
     var enableHwAccess by remember { mutableStateOf(initialEnableHwAccess) }
+    var enableGpuMode by remember { mutableStateOf(initialEnableGpuMode) }
     var enableTermuxX11 by remember { mutableStateOf(initialEnableTermuxX11) }
     var selinuxPermissive by remember { mutableStateOf(initialSelinuxPermissive) }
     var volatileMode by remember { mutableStateOf(initialVolatileMode) }
@@ -90,6 +96,7 @@ fun ContainerConfigScreen(
     var envFileContent by remember { mutableStateOf(initialEnvFileContent) }
     var upstreamInterfaces by remember { mutableStateOf(initialUpstreamInterfaces) }
     var portForwards by remember { mutableStateOf(initialPortForwards) }
+    var privileged by remember { mutableStateOf(initialPrivileged) }
     val context = LocalContext.current
 
     var availableUpstreams by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -149,6 +156,18 @@ fun ContainerConfigScreen(
     }
 
     var showEnvDialog by remember { mutableStateOf(false) }
+    var showPrivilegedDialog by remember { mutableStateOf(false) }
+
+    if (showPrivilegedDialog) {
+        PrivilegedModeDialog(
+            initialPrivileged = privileged,
+            onConfirm = { tags ->
+                privileged = tags
+                showPrivilegedDialog = false
+            },
+            onDismiss = { showPrivilegedDialog = false }
+        )
+    }
 
     if (showEnvDialog) {
         EnvironmentVariablesDialog(
@@ -180,7 +199,7 @@ fun ContainerConfigScreen(
             ) {
                 Button(
                     onClick = {
-                        onNext(netMode, disableIPv6, enableAndroidStorage, enableHwAccess, enableTermuxX11, selinuxPermissive, volatileMode, bindMounts, dnsServers, runAtBoot, forceCgroupv1, blockNestedNs, if (envFileContent.isBlank()) null else envFileContent, upstreamInterfaces, portForwards)
+                        onNext(netMode, disableIPv6, enableAndroidStorage, enableHwAccess, enableGpuMode, enableTermuxX11, selinuxPermissive, volatileMode, bindMounts, dnsServers, runAtBoot, forceCgroupv1, blockNestedNs, privileged, if (envFileContent.isBlank()) null else envFileContent, upstreamInterfaces, portForwards)
                     },
                     modifier = Modifier
                         .fillMaxWidth()
@@ -287,7 +306,7 @@ fun ContainerConfigScreen(
                         fontWeight = FontWeight.Bold,
                         color = if (!isUpstreamValid) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface
                     )
-                    
+
                     if (!isUpstreamValid) {
                         Text(
                             text = context.getString(R.string.upstream_interfaces_required_error),
@@ -389,7 +408,7 @@ fun ContainerConfigScreen(
 
                                     if (availableUpstreams.isNotEmpty()) {
                                         Text(context.getString(R.string.available_system_interfaces), style = MaterialTheme.typography.labelMedium)
-                                        
+
                                         Box(
                                             modifier = Modifier
                                                 .fillMaxWidth()
@@ -420,7 +439,7 @@ fun ContainerConfigScreen(
                                             }
                                         }
                                     }
-                                    
+
                                     Spacer(modifier = Modifier.height(8.dp))
                                     Text(context.getString(R.string.enter_manually), style = MaterialTheme.typography.labelMedium)
                                     OutlinedTextField(
@@ -531,7 +550,7 @@ fun ContainerConfigScreen(
 
                         val hostError = validatePortSpec(hostPort)
                         val containerError = validatePortSpec(containerPort)
-                        
+
                         var widthError: String? = null
                         if (hostError == null && containerError == null && hostPort.isNotBlank() && containerPort.isNotBlank()) {
                             if (getWidth(hostPort) != getWidth(containerPort)) {
@@ -587,7 +606,7 @@ fun ContainerConfigScreen(
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.onSurface
                                     )
-                                    
+
                                     Box(
                                         modifier = Modifier
                                             .fillMaxWidth()
@@ -612,7 +631,7 @@ fun ContainerConfigScreen(
                                                 isError = hostError != null || widthError != null || overlapError != null,
                                                 supportingText = { Text(hostError ?: widthError ?: overlapError ?: "") }
                                             )
-                                            
+
                                             OutlinedTextField(
                                                 value = containerPort,
                                                 onValueChange = { if (it.isEmpty() || it.all { c -> c.isDigit() || c == '-' }) containerPort = it },
@@ -623,7 +642,7 @@ fun ContainerConfigScreen(
                                                 isError = containerError != null || widthError != null || overlapError != null,
                                                 supportingText = { Text(containerError ?: widthError ?: overlapError ?: context.getString(R.string.optional_symmetric_hint)) }
                                             )
-                                            
+
                                             ExposedDropdownMenuBox(
                                                 expanded = protoExpanded,
                                                 onExpandedChange = { protoExpanded = !protoExpanded }
@@ -750,6 +769,15 @@ fun ContainerConfigScreen(
             )
 
             ToggleCard(
+                icon = Icons.Default.Memory,
+                title = context.getString(R.string.gpu_access),
+                description = context.getString(R.string.gpu_access_description),
+                checked = if (enableHwAccess) true else enableGpuMode,
+                onCheckedChange = { if (!enableHwAccess) enableGpuMode = it },
+                enabled = !enableHwAccess
+            )
+
+            ToggleCard(
                 painter = androidx.compose.ui.res.painterResource(R.drawable.ic_x11),
                 title = context.getString(R.string.termux_x11),
                 description = context.getString(R.string.termux_x11_description),
@@ -789,20 +817,28 @@ fun ContainerConfigScreen(
                 onCheckedChange = { forceCgroupv1 = it }
             )
 
+            val isSeccompDisabled = privileged.contains("noseccomp") || privileged.contains("full")
+            LaunchedEffect(isSeccompDisabled) {
+                if (isSeccompDisabled) blockNestedNs = false
+            }
+
             ToggleCard(
                 icon = Icons.Default.GppBad,
                 title = context.getString(R.string.manual_deadlock_shield),
                 description = context.getString(R.string.manual_deadlock_shield_description),
-                checked = blockNestedNs,
-                onCheckedChange = { blockNestedNs = it }
+                checked = if (isSeccompDisabled) false else blockNestedNs,
+                onCheckedChange = { blockNestedNs = it },
+                enabled = !isSeccompDisabled
             )
 
-            ToggleCard(
-                icon = Icons.Default.PowerSettingsNew,
-                title = context.getString(R.string.run_at_boot),
-                description = context.getString(R.string.run_at_boot_description),
-                checked = runAtBoot,
-                onCheckedChange = { runAtBoot = it }
+            SettingsRowCard(
+                title = context.getString(R.string.privileged_mode),
+                subtitle = if (privileged.isEmpty()) context.getString(R.string.not_configured) else privileged,
+                description = context.getString(R.string.privileged_mode_description),
+                icon = Icons.Default.GppMaybe,
+                onClick = {
+                    showPrivilegedDialog = true
+                }
             )
 
             Text(
@@ -835,6 +871,7 @@ fun ContainerConfigScreen(
                 }
             )
 
+
             // Bind Mounts Section
             Row(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -846,7 +883,6 @@ fun ContainerConfigScreen(
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold
                 )
-
             }
 
             bindMounts.forEach { mount ->
@@ -886,14 +922,23 @@ fun ContainerConfigScreen(
 
             OutlinedButton(
                 onClick = { showFilePicker = true },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
             ) {
                 Icon(Icons.Default.Add, contentDescription = null)
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(context.getString(R.string.add_bind_mount))
             }
+            ToggleCard(
+                icon = Icons.Default.PowerSettingsNew,
+                title = context.getString(R.string.run_at_boot),
+                description = context.getString(R.string.run_at_boot_description),
+                checked = runAtBoot,
+                onCheckedChange = { runAtBoot = it }
+            )
 
             Spacer(modifier = Modifier.height(16.dp))
+
         }
     }
 }

@@ -1,5 +1,5 @@
 /*
- * Droidspaces v5 — High-performance Container Runtime
+ * Droidspaces v5 - High-performance Container Runtime
  *
  * Copyright (C) 2026 ravindu644 <droidcasts@protonmail.com>
  * SPDX-License-Identifier: GPL-3.0-or-later
@@ -22,85 +22,82 @@ void print_usage(void) {
   printf("by " C_CYAN "%s" C_RESET "\n", DS_AUTHOR);
   printf("\n" C_BLUE "%s" C_RESET "\n", DS_REPO);
   printf(C_DIM "Built on: %s %s" C_RESET "\n\n", __DATE__, __TIME__);
-  printf("Usage: droidspaces [options] <command> [args]\n\n" C_BOLD
-         "Commands:" C_RESET "\n");
-  printf("  start                     Start a new container\n");
-  printf("  stop                      Stop one or more containers\n");
-  printf("  restart                   Restart a container\n");
-  printf("  enter [user]              Enter a running container\n");
-  printf("  run <cmd> [args]          Run a command in a running container\n");
-  printf("  status                    Show container status\n");
-  printf("  uptime                    Show how long the container has been "
-         "running\n");
-  printf("  info                      Show detailed container info\n");
-  printf("  show                      List all running containers\n");
-  printf("  scan                      Scan for untracked containers\n");
-  printf("  check                     Check system requirements\n");
-  printf("  docs                      Show interactive documentation\n");
-  printf("  help                      Show this help message\n");
-  printf("  version                   Show version information\n");
+  printf(
+      "Usage: droidspaces [options] <command> [args]\n\n" C_BOLD
+      "Commands:" C_RESET "\n"
+      "  start                     Start a new container\n"
+      "  stop                      Stop one or more containers\n"
+      "  restart                   Restart a container\n"
+      "  enter [user]              Enter a running container\n"
+      "  run <cmd> [args]          Run a command in a running container\n"
+      "  status                    Show container status\n"
+      "  uptime                    Show how long the container has been "
+      "running\n"
+      "  info                      Show detailed container info\n"
+      "  pid                       Show the live PID of the container init\n"
+      "  show                      List all running containers\n"
+      "  scan                      Scan for untracked containers\n"
+      "  check                     Check system requirements\n"
+      "  docs                      Show interactive documentation\n"
+      "  help                      Show this help message\n"
+      "  version                   Show version information\n\n"
 
-  printf(C_BOLD "\nOptions:" C_RESET "\n");
-  printf("  -r, --rootfs=PATH         Path to rootfs directory\n");
-  printf("  -i, --rootfs-img=PATH     Path to rootfs image (.img)\n");
-  printf("  -n, --name=NAME           Container name (auto-generated if "
-         "omitted)\n");
-  printf("  -h, --hostname=NAME       Set container hostname\n");
-  printf(
-      "  -d, --dns=SERVERS         Set custom DNS servers (comma separated)\n");
-  printf("  -f, --foreground          Run in foreground (attach console)\n");
-  printf("  -V, --volatile            Discard changes on exit (OverlayFS)\n");
-  printf("  -E, --env=PATH            Load environment variables from file\n");
-  printf(
-      "  -X, --termux-x11          Enable Termux-X11 support (Android only)\n");
-  printf("      --disable-ipv6        Disable IPv6 inside the container.\n"
-         "                            In host mode, this also disables IPv6\n"
-         "                            on the host network - VPN apps may break "
-         "in Android.\n"
-         "                            In NAT/none mode, IPv6 is always off.\n");
-  printf("      --net=MODE            Networking mode: host (default), nat, "
-         "none\n");
-  printf("      --upstream IFACE[,..] Upstream internet interface(s) for nat "
-         "mode\n"
-         "                            REQUIRED with --net=nat. Comma-separated "
-         "list\n"
-         "                            in priority order. Monitor tracks "
-         "whichever\n"
-         "                            is currently active (RUNNING + has a "
-         "route).\n"
-         "                            e.g. --upstream wlan0\n"
-         "                            e.g. --upstream wlan0,rmnet0,ccmni1\n");
-  printf(
-      "      --port HOST:CONT[/proto] Forward host port to container (nat "
+      C_BOLD "Options (Container Setup):" C_RESET "\n"
+      "  -r, --rootfs=PATH         Path to rootfs directory\n"
+      "  -i, --rootfs-img=PATH     Path to rootfs image (.img)\n"
+      "  -n, --name=NAME           Container name (auto-generated if omitted)\n"
+      "  -h, --hostname=NAME       Set container hostname\n"
+      "  -C, --conf=PATH           Load configuration from file\n\n"
+
+      C_BOLD "Options (Networking):" C_RESET "\n"
+      "      --net=MODE            Modes: host (default), nat, none\n"
+      "      --nat-ip=IP           Assign a fixed IP in 172.28.*.* range (nat "
       "mode)\n"
-      "                            e.g. --port 22:22 --port 8096:8096/tcp\n");
-  printf(
-      "      --nat-ip=IP           Assign a fixed IP to the container inside\n"
-      "                            the NAT subnet (" DS_DEFAULT_SUBNET ").\n"
-      "                            Auto-assigned and persisted on first boot\n"
-      "                            if omitted. Stable across reboots.\n"
-      "                            e.g. --nat-ip 172.28.5.10\n");
-  printf(
-      "  -B, --bind-mount=SRC:DEST Bind mount host directory into container\n");
-  printf("  -C, --conf=PATH           Load configuration from file\n");
-  printf("      --reset               Reset config to defaults (keeps "
-         "name/rootfs)\n");
-  printf(
-      "      --force-cgroupv1      Force legacy cgroup v1 hierarchy even if\n"
-      "                            v2 is available on the host. Useful if\n"
-      "                            modern cgroup v2 setup leads to stability\n"
-      "                            issues on legacy Android kernels.\n");
-  printf(
-      "      --block-nested-namespaces\n"
-      "                            Block nested namespace creation inside the\n"
-      "                            container (unshare/clone) to fix VFS\n"
-      "                            deadlocks on kernels like 4.14.x stock.\n");
-  printf("  --help                    Show this help message\n\n");
+      "      --upstream IFACE      Upstream interface(s) (supports wildcards, "
+      "e.g. rmnet*)\n"
+      "                            e.g. --upstream wlan0 or --upstream "
+      "wlan0,rmnet*\n"
+      "      --port [H:]C[/P]      Forward ports (supports ranges and "
+      "symmetric ports)\n"
+      "                            e.g. --port 22, 80:80/tcp, "
+      "1000-2000:1000-2000/udp\n"
+      "  -d, --dns=SERVERS         Set custom DNS servers (comma separated)\n"
+      "                            e.g. --dns 1.1.1.1,8.8.8.8\n"
+      "  -I, --disable-ipv6        Disable IPv6 inside the container\n\n"
 
-  printf(C_BOLD "Examples:" C_RESET "\n");
-  printf("  droidspaces --rootfs=/path/to/rootfs start\n");
-  printf("  droidspaces --name=mycontainer enter\n");
-  printf("  droidspaces --name=mycontainer stop\n\n");
+      C_BOLD "Options (Integration & Hardware):" C_RESET "\n"
+      "  -S, --enable-android-storage\n"
+      "                            Mount Android internal storage (/sdcard)\n"
+      "  -H, --hw-access           Enable direct hardware access (/dev nodes)\n"
+      "      --gpu                 Enable GPU acceleration nodes\n"
+      "  -X, --termux-x11          Configure Termux-X11 display support\n\n"
+
+      C_BOLD "Options (Security & Boot):" C_RESET "\n"
+      "  -P, --selinux-permissive  Set host SELinux to permissive mode\n"
+      "  -V, --volatile            Discard changes on exit (OverlayFS)\n"
+      "      --force-cgroupv1      Force legacy cgroup v1 hierarchy\n"
+      "      --block-nested-namespaces\n"
+      "                            Manual Deadlock Shield (no nested "
+      "namespaces)\n"
+      "      --privileged=TAGS     Relax security: nomask, nocaps, noseccomp, "
+      "shared, unfiltered-dev, full\n\n"
+
+      C_BOLD "Options (Advanced):" C_RESET "\n"
+      "  -f, --foreground          Run in foreground (attach console)\n"
+      "  -E, --env=PATH            Load environment variables from file\n"
+      "  -B, --bind=SRC:DEST       Bind mount host directory into container\n"
+      "                            Supports multiple flags or "
+      "comma-separation\n"
+      "                            e.g. -B /data:/data -B /tmp:/tmp\n"
+      "                            e.g. -B /data:/data,/tmp:/tmp\n"
+      "      --reset               Reset config to defaults (keeps "
+      "name/rootfs)\n"
+      "      --help                Show this help message\n\n"
+
+      C_BOLD "Examples:" C_RESET "\n"
+      "  droidspaces --rootfs=/path/to/rootfs start\n"
+      "  droidspaces --name=mycontainer enter\n"
+      "  droidspaces --name=mycontainer stop\n\n");
 }
 
 /* ---------------------------------------------------------------------------
@@ -257,11 +254,11 @@ static void enforce_nat_safety(struct ds_config *cfg, int argc, char **argv) {
 
   /* --upstream and --port are only meaningful with --net=nat */
   if (cfg->upstream_iface_count > 0 && cfg->net_mode != DS_NET_NAT) {
-    ds_warn("--upstream is only valid with --net=nat — ignoring");
+    ds_warn("--upstream is only valid with --net=nat - ignoring");
     cfg->upstream_iface_count = 0;
   }
   if (cfg->port_forward_count > 0 && cfg->net_mode != DS_NET_NAT) {
-    ds_warn("--port is only valid with --net=nat — ignoring");
+    ds_warn("--port is only valid with --net=nat - ignoring");
     cfg->port_forward_count = 0;
   }
 
@@ -335,6 +332,7 @@ int main(int argc, char **argv) {
       {"selinux-permissive", no_argument, 0, 'P'},
       {"volatile", no_argument, 0, 'V'},
       {"bind-mount", required_argument, 0, 'B'},
+      {"bind", required_argument, 0, 'B'},
       {"conf", required_argument, 0, 'C'},
       {"config", required_argument, 0, 'C'},
       {"env", required_argument, 0, 'E'},
@@ -343,13 +341,23 @@ int main(int argc, char **argv) {
       {"upstream", required_argument, 0, 259},
       {"force-cgroupv1", no_argument, 0, 260},
       {"block-nested-namespaces", no_argument, 0, 261},
+      {"privileged", required_argument, 0, 264},
       {"nat-ip", required_argument, 0, 262},
+      {"gpu", no_argument, 0, 263},
       {"reset", no_argument, 0, 256},
       {"help", no_argument, 0, 'v'},
       {0, 0, 0, 0}};
 
   extern int opterr;
   opterr = 0;
+
+  /* Resolve relative path arguments to absolute before any parsing.
+   * The daemon runs from CWD='/' (daemonize calls chdir("/")), so a relative
+   * path like --conf=./file.conf would resolve against '/' in the re-exec'd
+   * child.  Doing this here - while we still own the user's CWD - means every
+   * subsequent getopt pass reads absolute paths, covering all execution modes.
+   */
+  ds_resolve_argv_paths(argc - 1, argv + 1);
 
   /*
    * Multi-pass argument parsing:
@@ -407,12 +415,38 @@ int main(int argc, char **argv) {
   optind = 0; /* Reset for next steps */
 
   /*
+   * Daemon Proxying:
+   * Optimistically attempt to proxy commands to the background daemon.
+   * If the daemon is not reachable, fall back to direct execution.
+   */
+  int is_daemon_cmd = (discovered_cmd && strcmp(discovered_cmd, "daemon") == 0);
+
+  /*
+   * Commands that do not require root access (docs, help, version) or
+   * must be run locally to avoid recursive loops (mode) are never proxied.
+   */
+  int is_stateless_cmd =
+      (discovered_cmd && (strcmp(discovered_cmd, "docs") == 0 ||
+                          strcmp(discovered_cmd, "help") == 0 ||
+                          strcmp(discovered_cmd, "version") == 0 ||
+                          strcmp(discovered_cmd, "mode") == 0));
+
+  if (!is_daemon_cmd && !is_stateless_cmd && getenv("DS_NO_PROXY") == NULL) {
+    int proxy_ret = ds_client_run(argc - 1, argv + 1);
+    if (proxy_ret != -2) {
+      ret = proxy_ret;
+      goto cleanup;
+    }
+  }
+
+  /*
    * Unified Configuration Discovery and Loading
    * 1. Try to load from explicitly provided config file.
    * 2. Otherwise try to auto-detect config from rootfs paths.
    * 3. Ensure we have a container name for stateful commands.
-   * 4. Perform a recovery scan to load from ~/.local/share/... if config hasn't
-   * been loaded yet.
+   * 4. Perform a recovery scan to load from
+   *    <workspace dir>/Containers/<name>/container.config if config hasn't
+   *    been loaded yet.
    */
   int is_stateful =
       (discovered_cmd && (strcmp(discovered_cmd, "stop") == 0 ||
@@ -583,6 +617,9 @@ int main(int argc, char **argv) {
       cfg.net_mode = cli_net_mode;
       cli_net_mode_set = 1;
       break;
+    case 264:
+      parse_privileged(optarg, &cfg);
+      break;
 
     case 258: {
       /* --port HOST:CONTAINER[/proto]  (comma-separated list allowed), supports
@@ -689,8 +726,9 @@ int main(int argc, char **argv) {
                      ? (pf->container_port_end - pf->container_port)
                      : 0;
         if (hw != cw) {
-          ds_error("Port range width mismatch in --port: host %d vs container %d",
-                   hw + 1, cw + 1);
+          ds_error(
+              "Port range width mismatch in --port: host %d vs container %d",
+              hw + 1, cw + 1);
           ret = 1;
           goto cleanup;
         }
@@ -720,12 +758,12 @@ int main(int argc, char **argv) {
           int host_overlap = (hs1 <= he2 && hs2 <= he1);
 
           /* Container-side overlap */
-          uint16_t cs1 = pf->container_port,
-                   ce1 = pf->container_port_end ? pf->container_port_end
-                                                : pf->container_port;
-          uint16_t cs2 = ex->container_port,
-                   ce2 = ex->container_port_end ? ex->container_port_end
-                                                : ex->container_port;
+          uint16_t cs1 = pf->container_port, ce1 = pf->container_port_end
+                                                       ? pf->container_port_end
+                                                       : pf->container_port;
+          uint16_t cs2 = ex->container_port, ce2 = ex->container_port_end
+                                                       ? ex->container_port_end
+                                                       : ex->container_port;
           int cont_overlap = (cs1 <= ce2 && cs2 <= ce1);
 
           if (host_overlap || cont_overlap) {
@@ -830,12 +868,16 @@ int main(int argc, char **argv) {
       break;
     }
 
+    case 263:
+      /* --gpu: enable GPU acceleration in isolated tmpfs mode.
+       * Scans the host /dev for known GPU nodes and mknods them into the
+       * container's isolated /dev.  Safe to combine with --hw-access (which
+       * already does full GPU wiring). */
+      cfg.gpu_mode = 1;
+      break;
+
     case '?':
-      /* Ignore unknown options during override if we already found a cmd */
-      if (discovered_cmd)
-        break;
-      ret = 1;
-      goto cleanup;
+      break;
     default:
       break;
     }
@@ -843,6 +885,8 @@ int main(int argc, char **argv) {
 
   if (optind >= argc) {
     ds_error(C_BOLD "Missing command" C_RESET);
+    ds_log("Run '" C_BOLD "%s help" C_RESET "' for usage information.",
+           cfg.prog_name);
     ret = 1;
     goto cleanup;
   }
@@ -899,6 +943,17 @@ int main(int argc, char **argv) {
     ret = 0;
     goto cleanup;
   }
+  if (strcmp(cmd, "docs") == 0) {
+    print_documentation(argv[0]);
+    ret = 0;
+    goto cleanup;
+  }
+
+  if (strcmp(cmd, "mode") == 0) {
+    printf("%s\n", ds_daemon_probe() ? "daemon" : "direct");
+    ret = 0;
+    goto cleanup;
+  }
 
   /* Root required commands */
   if (getuid() != 0) {
@@ -929,15 +984,24 @@ int main(int argc, char **argv) {
       ret = 1;
       goto cleanup;
     }
-    if (check_requirements() < 0) {
+    if (check_requirements_hw(cfg.hw_access) < 0) {
       ret = 1;
       goto cleanup;
     }
     enforce_nat_safety(&cfg, argc, argv);
 
     print_ds_banner();
-    print_cgroup_status(&cfg);
+
+    print_privileged_warning(cfg.privileged_mask);
+
+    if ((cfg.privileged_mask & DS_PRIV_NOSEC) && cfg.block_nested_ns) {
+      ds_warn("--privileged=noseccomp is active: --block-nested-namespaces "
+              "is now a NO-OP.");
+    }
+
     check_kernel_recommendation();
+    ds_cgroup_host_bootstrap(cfg.force_cgroupv1);
+    print_cgroup_status(&cfg);
     if (cfg.container_name[0] == '\0' && cfg.rootfs_path[0]) {
       generate_container_name(cfg.rootfs_path, cfg.container_name,
                               sizeof(cfg.container_name));
@@ -952,12 +1016,22 @@ int main(int argc, char **argv) {
   }
 
   if (strcmp(cmd, "restart") == 0) {
-    if (check_requirements() < 0) {
+    if (check_requirements_hw(cfg.hw_access) < 0) {
       ret = 1;
       goto cleanup;
     }
     enforce_nat_safety(&cfg, argc, argv);
     print_ds_banner();
+
+    print_privileged_warning(cfg.privileged_mask);
+
+    if ((cfg.privileged_mask & DS_PRIV_NOSEC) && cfg.block_nested_ns) {
+      ds_warn("--privileged=noseccomp is active: --block-nested-namespaces "
+              "is now a NO-OP.");
+    }
+
+    check_kernel_recommendation();
+    ds_cgroup_host_bootstrap(cfg.force_cgroupv1);
     print_cgroup_status(&cfg);
     ret = restart_rootfs(&cfg);
     goto cleanup;
@@ -1022,7 +1096,19 @@ int main(int argc, char **argv) {
     goto cleanup;
   }
 
+  if (strcmp(cmd, "daemon") == 0) {
+    if (getuid() != 0) {
+      ds_error("Root privileges required for daemon mode");
+      ret = 1;
+      goto cleanup;
+    }
+    ret = ds_daemon_run(cfg.foreground, argv);
+    goto cleanup;
+  }
+
   ds_error("Unknown command: '%s'", cmd);
+  ds_log("Run '" C_BOLD "%s help" C_RESET "' for usage information.",
+         cfg.prog_name);
   ret = 1;
 
 cleanup:
